@@ -45,6 +45,11 @@ export async function GET(request: Request) {
   const schemeEarly =
     forwardedProtoEarly === "https" || reqUrlEarly.protocol === "https:" ? "https" : "http";
   const hostEarly = request.headers.get("host") || request.headers.get("Host") || reqUrlEarly.host;
+  // Rewrite reqUrlEarly with the forwarded scheme + host so error redirects
+  // (new URL(path, reqUrlEarly)) resolve to the public origin, not the
+  // container-internal bind address (e.g. http://0.0.0.0:20128) behind a proxy.
+  reqUrlEarly.protocol = schemeEarly;
+  reqUrlEarly.host = hostEarly;
   const originEarly = `${schemeEarly}://${hostEarly}`;
 
   if (!code || !returnedState) {
