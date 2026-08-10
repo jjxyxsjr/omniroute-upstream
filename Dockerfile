@@ -27,6 +27,15 @@ RUN npm install -g npm@latest \
 # ── Builder ────────────────────────────────────────────────────────────────
 FROM base AS builder
 
+# Proxy for build-time fetches (Google Fonts, GitHub release assets, node headers).
+# Passed via --build-arg HTTP_PROXY/HTTPS_PROXY; empty by default (no proxy).
+ARG HTTP_PROXY=""
+ARG HTTPS_PROXY=""
+ARG NO_PROXY=""
+ENV HTTP_PROXY=${HTTP_PROXY}
+ENV HTTPS_PROXY=${HTTPS_PROXY}
+ENV NO_PROXY=${NO_PROXY}
+
 # Build tools for native module compilation
 # apt-get update needed here because base's rm -rf clears the shared cache
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
