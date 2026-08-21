@@ -413,6 +413,40 @@ async function handleChatImplementation(
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "messages: Expected array, received undefined");
   }
 
+  // WorkBuddy defer-tool mitigation (2026-08-20 incident, see deploy repo
+  // docs/2026-08-20-WorkBuddy自定义模型工具丢失复盘.md): WorkBuddy injects a
+  // ToolSearch/DeferExecuteTool pair into custom-model sessions; strong tool-use
+  // models (glm-5.x) over-follow the defer protocol, loop on ToolSearch, and never
+  // call the direct tools (Read/Bash/...) — which are NOT in the search index.
+  // Stripping the pair restores direct tool calls. Controlled by STRIP_DEFER_TOOLS
+  // (default on; "0"/"false" disables for emergency rollback without a code change).
+  // Only the pair's names are removed; every other tool passes through untouched.
+  // The original body object is never mutated (spread into a new object) so the
+  // admission layer's preParsedBody stays pristine.
+  if (process.env.STRIP_DEFER_TOOLS !== "0" && process.env.STRIP_DEFER_TOOLS !== "false") {
+    const toolBody = body as { tools?: unknown };
+    if (Array.isArray(toolBody.tools) && toolBody.tools.length > 0) {
+      const DEFER_TOOL_NAMES = new Set(["ToolSearch", "DeferExecuteTool"]);
+      const filtered = toolBody.tools.filter(
+        (t: unknown) =>
+          typeof t === "object" &&
+          t !== null &&
+          !DEFER_TOOL_NAMES.has(
+            (t as { function?: { name?: string }; name?: string }).function?.name ??
+              (t as { name?: string }).name ??
+              ""
+          )
+      );
+      if (filtered.length !== toolBody.tools.length) {
+        log.info(
+          "CHAT",
+          `Stripped defer tool pair from request: ${toolBody.tools.length} -> ${filtered.length} tools`
+        );
+        body = { ...toolBody, tools: filtered };
+      }
+    }
+  }
+
   // Reject non-string `model` before it reaches downstream code that calls
   // `.toLowerCase()` / `.split()` / `.startsWith()` on it (crash-then-500 with an
   // empty body, escaping the error sanitizer — #6407). An explicit `null`/`undefined`
