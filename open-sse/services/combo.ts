@@ -529,9 +529,26 @@ export async function buildAutoCandidates(
   );
 
   // Filter out candidates whose model is hidden by the user in the dashboard
+  // 007-a1: also drop candidates whose (provider, connection, model) is currently
+  // model-locked, or whose connection is inside an active rateLimitedUntil cooldown.
+  // Without this, a stale quota cache can keep a dead connection's reset-aware score
+  // high enough to WIN candidate selection; auth then finds no credentials for the
+  // forced connection and the combo 503s with ALL_ACCOUNTS_INACTIVE (2026-08-21
+  // incident, deploy docs/190 §3.A1). Dead candidates never reach winner election —
+  // the strategy falls through to the next healthy connection instead.
   return candidates.filter((c) => {
     const hiddenModels = hiddenModelsMap.get(c.provider);
-    return !hiddenModels?.has(c.model);
+    if (hiddenModels?.has(c.model)) return false;
+    if (c.connectionId) {
+      if (isModelLocked(c.provider, c.connectionId, c.model)) return false;
+      const conn = connectionById.get(c.connectionId) as
+        | { rateLimitedUntil?: string | number | null }
+        | undefined;
+      const cooldownUntil =
+        conn?.rateLimitedUntil == null ? NaN : new Date(conn.rateLimitedUntil).getTime();
+      if (Number.isFinite(cooldownUntil) && cooldownUntil > Date.now()) return false;
+    }
+    return true;
   });
 }
 
