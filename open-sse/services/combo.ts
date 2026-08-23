@@ -2002,6 +2002,13 @@ export async function handleComboChat({
 
       // All set retries exhausted — return the final error
       if (!lastStatus) {
+        // 007-a2: this 503 was previously invisible server-side (no log line) —
+        // surface the combo + session so lockout/cooldown cascades are greppable.
+        log?.warn?.(
+          "COMBO_NO_CANDIDATE",
+          "All combo candidates inactive — no connection survived filtering",
+          { combo: combo.name, sessionId: effectiveSessionId ?? null }
+        );
         notifyWebhookEvent("request.failed", {
           combo: combo.name,
           reason: "ALL_ACCOUNTS_INACTIVE",
@@ -2965,6 +2972,12 @@ async function handleRoundRobinCombo({
   }
 
   if (!lastStatus) {
+    // 007-a2 (round-robin path): same observability gap as the strategy path above.
+    log?.warn?.(
+      "COMBO_NO_CANDIDATE_RR",
+      "All combo candidates inactive — no connection survived filtering (round-robin)",
+      { combo: combo.name }
+    );
     return new Response(
       JSON.stringify({
         error: {
