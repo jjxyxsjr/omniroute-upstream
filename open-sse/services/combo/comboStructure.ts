@@ -162,6 +162,15 @@ export function filterVisibleComboTargets(
   targets: ResolvedComboTarget[],
   hiddenModelsByProvider: HiddenModelsByProvider = getHiddenModelsByProvider()
 ): ResolvedComboTarget[] {
+  // 003c (2026-08-25): OMNIROUTE_KEEP_HIDDEN_COMBO_CANDIDATES=1 decouples
+  // catalog visibility from combo candidacy for NAMED combos. Upstream couples
+  // them — hiding a model in the dashboard also removes it as a combo target —
+  // which forces operators to keep a combo-relevant model listed in /v1/models
+  // (re-exposing the model-list tail-item trap; deploy docs/180 + 060
+  // 2026-08-25). With the flag set, hidden means "invisible in the catalog"
+  // only; explicitly configured combo targets keep serving. Auto-combo
+  // candidate discovery still honors hidden — only named targets bypass.
+  if (process.env.OMNIROUTE_KEEP_HIDDEN_COMBO_CANDIDATES === "1") return targets;
   return targets.filter((target) => isComboTargetVisible(target, hiddenModelsByProvider));
 }
 
@@ -495,7 +504,12 @@ function estimateRequestInputTokens(body: Record<string, unknown>): number {
 }
 
 function valueContainsImagePart(value: unknown): boolean {
-  return containsMediaKind([{ content: [value] }], "image");
+  // 008 (2026-08-25): structural-only — a data:image URI sitting inside a tool
+  // argument (string, not a typed image part) must not mark the request as
+  // vision-requiring. That false positive permanently failed capability
+  // matching for the whole session (capability_mismatch sticking, deploy
+  // docs/060 2026-08-24 16:20 entry).
+  return containsMediaKind([{ content: [value] }], "image", { structuredOnly: true });
 }
 
 export function deriveRequestCompatibilityRequirements(

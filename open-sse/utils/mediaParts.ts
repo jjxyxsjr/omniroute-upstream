@@ -57,6 +57,14 @@ interface DetectCtx {
   partIndex: number;
   /** When set, `found` flips true on the first part of this kind (early exit). */
   stopAtKind?: MediaKind;
+  /**
+   * 008 (2026-08-25): skip the bare-string deep scan — only structurally-typed
+   * image parts (image_url/input_image/source/…) count. Used by capability
+   * detection so a data:image URI surviving inside a tool argument no longer
+   * marks the whole request as vision-requiring (the capability_mismatch
+   * session-sticking bug). Extraction paths keep the full scan.
+   */
+  structuredOnly?: boolean;
   found?: boolean;
 }
 
@@ -226,8 +234,12 @@ function inspectImageIndicators(
 function inspect(value: unknown, ctx: DetectCtx, depth: number): void {
   if (ctx.found || depth > MAX_DEPTH || value == null) return;
   if (typeof value === "string") {
-    if (value.startsWith("data:image/")) pushPart(ctx, "image", value, "data_uri_string", depth);
-    if (value.startsWith("data:video/")) pushPart(ctx, "video", value, "data_uri_string", depth);
+    // 008: bare strings only count as media when the caller did not ask for
+    // structural-only detection (capability checks).
+    if (!ctx.structuredOnly) {
+      if (value.startsWith("data:image/")) pushPart(ctx, "image", value, "data_uri_string", depth);
+      if (value.startsWith("data:video/")) pushPart(ctx, "video", value, "data_uri_string", depth);
+    }
     return;
   }
   if (Array.isArray(value)) {
@@ -280,7 +292,8 @@ export function detectMediaParts(
  */
 export function containsMediaKind(
   messages: ReadonlyArray<{ role?: string; content?: unknown }> | undefined | null,
-  kind: MediaKind
+  kind: MediaKind,
+  options?: { structuredOnly?: boolean }
 ): boolean {
   if (!Array.isArray(messages)) return false;
   const out: MediaPart[] = [];
@@ -288,7 +301,13 @@ export function containsMediaKind(
     const content = messages[messageIndex]?.content;
     if (!Array.isArray(content)) continue;
     for (let partIndex = 0; partIndex < content.length; partIndex++) {
-      const ctx: DetectCtx = { out, messageIndex, partIndex, stopAtKind: kind };
+      const ctx: DetectCtx = {
+        out,
+        messageIndex,
+        partIndex,
+        stopAtKind: kind,
+        structuredOnly: options?.structuredOnly,
+      };
       inspect(content[partIndex], ctx, 0);
       if (ctx.found) return true;
     }

@@ -77,7 +77,14 @@ function isMediaTypeImage(value: Record<string, unknown>): boolean {
 
 function valueContainsImagePart(value: unknown, depth = 0): boolean {
   if (depth > 8 || value === null || value === undefined) return false;
-  if (typeof value === "string") return value.startsWith("data:image/");
+  // 008 (2026-08-25): the legacy bare-string branch (any string starting with
+  // "data:image/") deep-scanned EVERY string in the body — including tool
+  // arguments — so a pasted data URI surviving in a tool param permanently
+  // marked the session vision-requiring and failed capability matching for
+  // text-only targets (capability_mismatch session sticking). Real images are
+  // always structurally typed (image_url/input_image parts, Anthropic source
+  // blocks) and are covered by the checks below; bare strings are not images.
+  if (typeof value === "string") return false;
   if (Array.isArray(value)) return value.some((entry) => valueContainsImagePart(entry, depth + 1));
   if (!isRecord(value)) return false;
 

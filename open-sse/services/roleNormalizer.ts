@@ -64,6 +64,13 @@ const MODELS_WITHOUT_SYSTEM_ROLE = [
  */
 function isGlmWithoutSystemRole(modelLower: string): boolean {
   if (!modelLower.startsWith("glm")) return false;
+  // 009 (2026-08-25): the GLM vision models on the modern Zhipu endpoints
+  // accept a native system message (verified live against
+  // open.bigmodel.cn/api/coding — system+image answers correctly), and the
+  // fold is catastrophic for them (see the structure-preserving merge above
+  // for the general fix; this exemption additionally keeps their payload in
+  // native shape rather than relying on the fold at all).
+  if (/^glm-4\.[56]v/.test(modelLower)) return false;
   const match = modelLower.match(/glm-?(\d+)(?:[.p](\d+))?/);
   if (match) {
     const major = Number(match[1]);
@@ -237,12 +244,42 @@ export function normalizeSystemRole(
   );
   if (firstUserIdx >= 0) {
     const userMsg = nonSystemMessages[firstUserIdx];
-    const userContent = extractTextFromContent(userMsg.content);
+    const userText = extractTextFromContent(userMsg.content);
 
-    nonSystemMessages[firstUserIdx] = {
-      ...userMsg,
-      content: `[System Instructions]\n${systemContent}\n\n[User Message]\n${userContent}`,
-    };
+    // 009 (2026-08-25): the fold used to replace the first user message with a
+    // plain STRING built from its text parts — physically deleting every
+    // non-text part (image_url / input_image / file…) of that message. For a
+    // vision request to a model flagged without system role (e.g. glm-4.6v via
+    // isGlmWithoutSystemRole), that meant pasting a screenshot alongside a
+    // system prompt silently stripped the image (wire-capture evidence, deploy
+    // docs/060 2026-08-25 04:45). Preserve structure instead: emit the folded
+    // text as a leading text part and pass every non-text part through
+    // untouched. String content keeps the legacy single-string shape.
+    if (Array.isArray(userMsg.content)) {
+      const preservedParts = userMsg.content.filter(
+        (part) =>
+          !(
+            part &&
+            typeof part === "object" &&
+            "type" in part &&
+            (part as MessageContentPart).type === "text"
+          )
+      );
+      const foldedText = userText
+        ? `[System Instructions]\n${systemContent}\n\n[User Message]\n${userText}`
+        : `[System Instructions]\n${systemContent}`;
+      nonSystemMessages[firstUserIdx] = {
+        ...userMsg,
+        content: [{ type: "text", text: foldedText }, ...preservedParts],
+      };
+    } else {
+      nonSystemMessages[firstUserIdx] = {
+        ...userMsg,
+        content: userText
+          ? `[System Instructions]\n${systemContent}\n\n[User Message]\n${userText}`
+          : `[System Instructions]\n${systemContent}`,
+      };
+    }
   } else {
     // No user message found — insert as a user message at the beginning
     nonSystemMessages.unshift({
