@@ -317,7 +317,12 @@ export function scoreResetAwareQuota(
   quota: unknown,
   config: ReturnType<typeof resolveResetAwareConfig>
 ) {
-  if (!quota || !isRecord(quota)) return { score: 0.5 };
+  // 003-arkscore: providers without a quota fetcher (e.g. anthropic-compatible
+  // Ark) used to sit at a constant 0.5 — outranking every real GLM session
+  // score (~0.45 max) and pinning traffic to an account whose true capacity is
+  // unknown. Floor no-data accounts at 0.05 so they only serve as last-resort
+  // fallback when every scored account is exhausted.
+  if (!quota || !isRecord(quota)) return { score: 0.05 };
   if (quota.limitReached === true) return { score: -Infinity };
 
   const overallPercentUsed = clamp01(finiteNumberOrNull(quota.percentUsed) ?? 0.5);
