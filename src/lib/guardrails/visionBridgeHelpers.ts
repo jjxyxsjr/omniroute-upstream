@@ -732,7 +732,13 @@ async function callVisionModelSingle(
               ],
             },
           ],
-          max_tokens: 300,
+          // nnd patch (multimodal enablement, 2026-08-24): upstream hardcoded 300,
+          // which thinking-model describe targets (glm-4.6v) exhaust on
+          // chain-of-thought — tripping the provider's quality-validation failure
+          // and cascading into model lockout + account cooldown (documented
+          // incident, deploy docs/060 2026-08-24 15:00). 1024 keeps describe
+          // cheap while leaving reasoning headroom.
+          max_tokens: 1024,
         }),
       });
     } else {
@@ -830,7 +836,10 @@ async function callVisionModelSingle(
               ],
             },
           ],
-          max_tokens: 300,
+          // nnd patch: see the Anthropic branch above — 300 starves thinking
+          // models on the self-loop describe path; 1024 avoids the quality
+          // lockout cascade while keeping describe costs bounded.
+          max_tokens: 1024,
         }),
       });
     }

@@ -317,12 +317,17 @@ export function scoreResetAwareQuota(
   quota: unknown,
   config: ReturnType<typeof resolveResetAwareConfig>
 ) {
-  // 003-arkscore: providers without a quota fetcher (e.g. anthropic-compatible
-  // Ark) used to sit at a constant 0.5 — outranking every real GLM session
-  // score (~0.45 max) and pinning traffic to an account whose true capacity is
-  // unknown. Floor no-data accounts at 0.05 so they only serve as last-resort
-  // fallback when every scored account is exhausted.
-  if (!quota || !isRecord(quota)) return { score: 0.05 };
+  // 003-arkscore (003b, 2026-08-24 晚): providers without a quota fetcher (e.g.
+  // anthropic-compatible Ark) used to sit at the upstream 0.5 constant —
+  // outranking every real GLM session score (~0.45 max) and pinning traffic to
+  // an account whose true capacity is unknown. The first cut floored no-data
+  // accounts at 0.05 (pure last-resort), which left Ark permanently inactive.
+  // 0.35 lands inside the default 30% tie band relative to healthy GLM scores
+  // (~0.40-0.45): GLM stays preferred, Ark joins the rotate-leading-ties round
+  // robin for a bounded standing share of NEW sessions, and it takes over as
+  // GLM accounts deplete below the band floor. Per-connection max_concurrent
+  // stays the hard fuse. Raise back toward 0.5 only with a real quota fetcher.
+  if (!quota || !isRecord(quota)) return { score: 0.35 };
   if (quota.limitReached === true) return { score: -Infinity };
 
   const overallPercentUsed = clamp01(finiteNumberOrNull(quota.percentUsed) ?? 0.5);
