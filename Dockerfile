@@ -187,9 +187,21 @@ ENV NODE_OPTIONS="--max-old-space-size=${OMNIROUTE_BUILD_MEMORY_MB}"
 ENV CIRCLE_NODE_TOTAL=8
 
 COPY . ./
-RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-next-cache,target=/app/.build/next/cache \
-  mkdir -p /app/data \
+# Workaround for the #11318 Docker-build regression on this tip: the compression
+# worker pool references `new URL("compressionWorker.js", import.meta.url)`, but the
+# Docker path (build-next-isolated.mjs) never generates that artifact — only
+# prepublish.ts/colocate-standalone.mjs do, and neither is wired into the image
+# build. Webpack fails with "Module not found" and Turbopack panics
+# (ImportTracer::get_traces) on the same unresolvable reference. Bundle the worker
+# in place BEFORE `next build` (same esbuild recipe as prepublish.ts), then run the
+# repo's own colocate script after the build so every worker lands in the
+# standalone tree.
+RUN node_modules/.bin/esbuild open-sse/services/compression/compressionWorker.ts \
+    --bundle --platform=node --packages=external --format=esm \
+    --outfile=open-sse/services/compression/compressionWorker.js \
+  && mkdir -p /app/data \
   && npm run build \
+  && node scripts/build/colocate-standalone.mjs \
   && node --input-type=module -e "import { createRequire } from 'node:module'; import { pathToFileURL } from 'node:url'; const standaloneRoot = '/app/.build/next/standalone/node_modules/'; const require = createRequire('/app/.build/next/standalone/package.json'); for (const pkg of ['@atjsh/llmlingua-2', '@huggingface/transformers', 'js-tiktoken']) { const resolved = require.resolve(pkg); if (!resolved.startsWith(standaloneRoot)) throw new Error(pkg + ' resolved outside standalone: ' + resolved); await import(pathToFileURL(resolved).href); } const onnxRuntime = require.resolve('onnxruntime-node'); if (!onnxRuntime.startsWith(standaloneRoot)) throw new Error('onnxruntime-node resolved outside standalone: ' + onnxRuntime); await import(pathToFileURL(onnxRuntime).href);"
 
 # ── Runner base ────────────────────────────────────────────────────────────
