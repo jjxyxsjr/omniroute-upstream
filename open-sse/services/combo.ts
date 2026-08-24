@@ -2618,6 +2618,13 @@ async function handleComboChatInner({
       finishComboTrace(traceInvocationId, { status: 503 });
       if (!lastStatus) {
         if (recordedAttempts === 0) {
+          // 007-a2 (skipped path): pre-dispatch filters removed every target —
+          // same silent-503 gap, so it gets the same greppable warn.
+          log?.warn?.(
+            "COMBO_NO_CANDIDATE",
+            "All combo targets skipped by pre-dispatch filters",
+            { combo: combo.name, sessionId: effectiveSessionId ?? null, code: "ALL_TARGETS_SKIPPED" }
+          );
           notifyWebhookEvent("request.failed", {
             combo: combo.name,
             reason: "ALL_TARGETS_SKIPPED",
@@ -2634,6 +2641,13 @@ async function handleComboChatInner({
             observedFailure ? allObservedFailuresQuota : null
           );
         }
+        // 007-a2: this 503 was previously invisible server-side (no log line) —
+        // surface the combo + session so lockout/cooldown cascades are greppable.
+        log?.warn?.(
+          "COMBO_NO_CANDIDATE",
+          "All combo candidates inactive — no connection survived filtering",
+          { combo: combo.name, sessionId: effectiveSessionId ?? null }
+        );
         notifyWebhookEvent("request.failed", {
           combo: combo.name,
           reason: "ALL_ACCOUNTS_INACTIVE",
@@ -3805,6 +3819,13 @@ async function handleRoundRobinCombo({
 
   if (!lastStatus) {
     if (recordedAttempts === 0) {
+      // 007-a2 (skipped path, round-robin): pre-dispatch filters removed every
+      // target — same silent-503 gap as the strategy path.
+      log?.warn?.(
+        "COMBO_NO_CANDIDATE_RR",
+        "All combo targets skipped by pre-dispatch filters (round-robin)",
+        { combo: combo.name, code: "ALL_TARGETS_SKIPPED" }
+      );
       return new Response(
         JSON.stringify({
           error: {
@@ -3817,6 +3838,12 @@ async function handleRoundRobinCombo({
         { status: 503, headers: { "Content-Type": "application/json" } }
       );
     }
+    // 007-a2 (round-robin path): same observability gap as the strategy path above.
+    log?.warn?.(
+      "COMBO_NO_CANDIDATE_RR",
+      "All combo candidates inactive — no connection survived filtering (round-robin)",
+      { combo: combo.name }
+    );
     return new Response(
       JSON.stringify({
         error: {
