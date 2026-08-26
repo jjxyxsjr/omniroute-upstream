@@ -114,11 +114,24 @@ RUN test -f package-lock.json \
 # in production (TlsClientUnavailableError, #7802). Run it explicitly here so
 # a broken/rate-limited fetch fails the BUILD loudly instead of shipping a
 # broken image.
+# nnd fork: the build host cannot rely on the GitHub Releases API (Docker Hub
+# is already unreachable from this network; api.github.com is rate-limit
+# roulette — it cost the first nnd.6 build attempt on 2026-08-26 after the
+# 13:30 build-cache prune removed the layer that had cached past this step).
+# Seed bin/ with the exact .so proven in production (extracted from the
+# running nnd.5 image) BEFORE the explicit postinstall run: when the API
+# answers, postinstall sees the expected file already present and no-ops;
+# when it cannot answer, its warn-and-exit-0 path is covered by the seed and
+# the non-empty-bin guard below still passes. Refresh vendor/tls-client/ when
+# bumping tls-client-node so the seeded version keeps matching.
+COPY vendor/tls-client/ /tmp/tls-client-vendor/
 RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
   npm ci --include=optional --no-audit --no-fund --legacy-peer-deps --ignore-scripts \
   && (cd node_modules/better-sqlite3 \
       && node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild) \
   && node -e "require('better-sqlite3')(':memory:').close()" \
+  && mkdir -p node_modules/tls-client-node/bin \
+  && cp /tmp/tls-client-vendor/tls-client-*.so node_modules/tls-client-node/bin/ \
   && node node_modules/tls-client-node/scripts/postinstall.js \
   && (test -n "$(find node_modules/tls-client-node/bin -mindepth 1 -print -quit 2>/dev/null)" \
       || (echo "tls-client-node native binary missing after postinstall — GitHub API fetch likely rate-limited or failed (#7802)" >&2 && exit 1))
