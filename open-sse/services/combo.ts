@@ -611,7 +611,7 @@ export async function buildAutoCandidates(
   // forced connection and the combo 503s with ALL_ACCOUNTS_INACTIVE (2026-08-21
   // incident, deploy docs/190 §3.A1). Dead candidates never reach winner election —
   // the strategy falls through to the next healthy connection instead.
-  return candidates.filter((c) => {
+  const visibilityKept = candidates.filter((c) => {
     const hiddenModels = hiddenModelsMap.get(c.provider);
     if (hiddenModels?.has(c.model)) return false;
     if (c.connectionId) {
@@ -625,6 +625,26 @@ export async function buildAutoCandidates(
     }
     return true;
   });
+
+  // 010 (saturation spillover): auto candidates whose connection's account
+  // semaphore is at capacity are skipped before winner election, so auto-combo
+  // falls through to the next healthy connection instead of queueing behind a
+  // long job at dispatch (2026-08-24 ark lane jam, deploy docs/150 §2). Reads
+  // the SAME gate the dispatch path acquires (chatCore ->
+  // acquireAccountSemaphore) via the lock-free isAccountSemaphoreFull. When
+  // every candidate is saturated the unfiltered list is kept — this filter
+  // must never empty the candidate set; queueing remains the floor.
+  const saturationKept = visibilityKept.filter((c) => {
+    if (!c.connectionId) return true;
+    const conn = connectionById.get(c.connectionId) as
+      | { maxConcurrent?: number | null; max_concurrent?: number | null }
+      | undefined;
+    const raw = conn?.maxConcurrent ?? conn?.max_concurrent;
+    const cap = typeof raw === "number" ? raw : Number(raw);
+    if (!Number.isFinite(cap) || cap <= 0) return true;
+    return !isAccountSemaphoreFull(c.provider, c.connectionId, cap);
+  });
+  return saturationKept.length > 0 ? saturationKept : visibilityKept;
 }
 
 // Context-cache pin health gate — moved to combo/dispatchPrelude.ts alongside the

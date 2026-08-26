@@ -34,6 +34,7 @@ import { PRE_SCREEN_CONCURRENCY } from "../comboConfig.ts";
 import { getQuotaFetcher } from "../quotaPreflight.ts";
 import { getCircuitBreaker } from "../../../src/shared/utils/circuitBreaker";
 import { getCachedProviderConnections } from "../../../src/lib/db/readCache";
+import { isAccountSemaphoreFull } from "../accountSemaphore.ts";
 import { MAX_RR_COUNTERS, rrCounters } from "./rrState.ts";
 import type { ResolvedComboTarget, IsModelAvailable } from "./types.ts";
 import {
@@ -238,8 +239,77 @@ async function expandTargetsByQuotaAwareConnections(
   return { connectionById, expandedTargets };
 }
 
-async function scoreQuotaAwareTargets<TScore extends object>({
-  comboName,
+/**
+ * 010 (saturation spillover): drop targets whose account semaphore is at
+ * capacity so winner election falls through to the next healthy pool instead
+ * of the request queueing behind a long job at dispatch time (2026-08-24 ark
+ * lane jam — 139 req/h against 2 lanes, a 532s job stranding three users;
+ * deploy docs/150 §2). Saturation is read through the SAME gate the dispatch
+ * path acquires (chatCore.ts -> acquireAccountSemaphore, key
+ * `provider:connectionId`) via the lock-free isAccountSemaphoreFull.
+ *
+ * When EVERY target is saturated the unfiltered list is returned — this filter
+ * must never empty the candidate set; queueing at dispatch remains the floor.
+ */
+async function dropSaturatedTargets(
+  targets: ResolvedComboTarget[],
+  connectionById: Map<string, Record<string, unknown>>
+): Promise<ResolvedComboTarget[]> {
+  const providerConnections = new Map<string, Array<Record<string, unknown>>>();
+  const kept: ResolvedComboTarget[] = [];
+
+  for (const target of targets) {
+    const provider = getResetAwareProvider(target);
+    if (!provider) {
+      kept.push(target);
+      continue;
+    }
+
+    if (target.connectionId) {
+      const cap = positiveConnectionCap(connectionById.get(target.connectionId));
+      if (cap !== null && isAccountSemaphoreFull(provider, target.connectionId, cap)) {
+        continue;
+      }
+      kept.push(target);
+      continue;
+    }
+
+    // Bare target (provider without a quota fetcher — the production shape of
+    // a custom anthropic-compatible Ark node): the target carries no
+    // connectionId, so saturation is judged on the provider's whole active
+    // pool — skipped only when EVERY connection that declares a positive cap
+    // is at capacity. Providers without capped connections are never filtered.
+    if (!providerConnections.has(provider)) {
+      const rows = await getCachedProviderConnections({ provider, isActive: true });
+      providerConnections.set(
+        provider,
+        Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : []
+      );
+    }
+    const capped = providerConnections
+      .get(provider)!
+      .filter((row) => typeof row.id === "string" && positiveConnectionCap(row) !== null);
+    const allSaturated =
+      capped.length > 0 &&
+      capped.every((row) =>
+        isAccountSemaphoreFull(provider, String(row.id), positiveConnectionCap(row)!)
+      );
+    if (allSaturated) continue;
+    kept.push(target);
+  }
+
+  return kept.length > 0 ? kept : targets;
+}
+
+function positiveConnectionCap(
+  connection: Record<string, unknown> | undefined
+): number | null {
+  const raw = connection?.maxConcurrent ?? connection?.max_concurrent;
+  const cap = typeof raw === "number" ? raw : Number(raw);
+  return Number.isFinite(cap) && cap > 0 ? cap : null;
+}
+
+async function scoreQuotaAwareTargets<TScore extends object>({  comboName,
   config,
   connectionById,
   expandedTargets,
@@ -496,11 +566,16 @@ export async function orderTargetsByResetAwareQuota(
     apiKeyAllowedConnectionIds
   );
 
+  // 010 (saturation spillover): candidates at capacity are dropped before
+  // scoring so the strategy elects a healthy pool instead of queueing at the
+  // dispatch gate (all-saturated keeps the unfiltered list — see helper).
+  const saturationKept = await dropSaturatedTargets(expandedTargets, connectionById);
+
   const scoredTargets = await scoreQuotaAwareTargets({
     comboName,
     config,
     connectionById,
-    expandedTargets,
+    expandedTargets: saturationKept,
     log,
     scoreQuota: (quota) => ({ score: scoreResetAwareQuota(quota, config).score }),
   });
