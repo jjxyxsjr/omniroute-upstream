@@ -398,7 +398,11 @@ export function isTokenLimitBreachErrorBody(errorBody: unknown): boolean {
   return (error as Record<string, unknown>).code === "TOKEN_LIMIT_EXCEEDED";
 }
 
-/** Local limiter capacity is not an upstream/provider failure and must not cascade. */
+/** Local limiter capacity is not an upstream/provider failure and must not cascade.
+ * Same for the account-semaphore gate (chatCore maxConcurrent FIFO): its 429s
+ * (SEMAPHORE_TIMEOUT / SEMAPHORE_QUEUE_FULL, type account_semaphore_capacity)
+ * are OUR queue pressure — cooling the connection or bumping backoffLevel for
+ * them makes a busy narrow lane colder, not healthier. */
 export function isLocalQueueCapacityErrorBody(errorBody: unknown): boolean {
   if (!errorBody || typeof errorBody !== "object") return false;
   const error = (errorBody as Record<string, unknown>).error;
@@ -409,7 +413,10 @@ export function isLocalQueueCapacityErrorBody(errorBody: unknown): boolean {
     code === "RATE_LIMIT_QUEUE_TIMEOUT" ||
     code === "RATE_LIMIT_QUEUE_FULL" ||
     code === "RATE_LIMIT_QUEUE_WEDGED" ||
-    type === "local_queue_capacity"
+    code === "SEMAPHORE_TIMEOUT" ||
+    code === "SEMAPHORE_QUEUE_FULL" ||
+    type === "local_queue_capacity" ||
+    type === "account_semaphore_capacity"
   );
 }
 

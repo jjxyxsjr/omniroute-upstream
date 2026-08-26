@@ -3735,9 +3735,23 @@ export async function handleChatCore({
         cacheSource: "upstream",
       });
       persistFailureUsage(HTTP_STATUS.RATE_LIMITED, error.code);
+      // Both error shapes must carry the semaphore code (+ type): the combo layer
+      // classifies local capacity pressure by body (isLocalQueueCapacityErrorBody),
+      // and a bare non-streaming body would fall through to upstream-429 accounting.
       const result = stream
-        ? createStreamingErrorResult(HTTP_STATUS.RATE_LIMITED, failureMessage, error.code)
-        : createErrorResult(HTTP_STATUS.RATE_LIMITED, failureMessage);
+        ? createStreamingErrorResult(
+            HTTP_STATUS.RATE_LIMITED,
+            failureMessage,
+            error.code,
+            "account_semaphore_capacity"
+          )
+        : createErrorResult(
+            HTTP_STATUS.RATE_LIMITED,
+            failureMessage,
+            null,
+            error.code,
+            "account_semaphore_capacity"
+          );
       return {
         ...result,
         errorType: "account_semaphore_capacity",
