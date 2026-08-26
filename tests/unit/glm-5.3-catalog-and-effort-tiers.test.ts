@@ -99,6 +99,7 @@ test("catalog exposes only GLM effort tiers that each provider can route", () =>
     ["glm-5.3", ["low", "high", "max"]],
     ["glm-5.3-high", ["high"]],
     ["glm-5.3-low", ["low"]],
+    ["glm-5.3-flash", ["low", "high", "max"]],
     ["glm-5.2", ["high", "max"]],
     ["glm-5.2-high", ["high"]],
     ["glm-5.2-max", ["max"]],
@@ -138,6 +139,37 @@ for (const provider of ["glm", "glm-cn", "glmt"]) {
     assert.equal(base.supportsReasoning, true);
   });
 }
+
+test("GLM-5.3-Flash is registered on shared GLM providers (1M ctx / 128K out / vision / max-default effort)", () => {
+  // 2026-08-26 native-multimodal release; thinking cannot be disabled and text
+  // params match GLM-5.3 (reasoning_effort low|high|max, default max).
+  // https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash
+  for (const provider of ["glm", "glm-cn", "glmt"]) {
+    const models = getRegistryEntry(provider)!.models ?? [];
+    const flash = models.find((m) => m.id === "glm-5.3-flash");
+    assert.ok(flash, `${provider} should expose glm-5.3-flash; got ${models.map((m) => m.id).join(", ")}`);
+    assert.equal(flash.contextLength, 1_000_000, `${provider} context`);
+    assert.equal(flash.maxOutputTokens, 128_000, `${provider} max output`);
+    assert.equal(flash.supportsVision, true, `${provider} vision`);
+    assert.equal(flash.supportsReasoning, true, `${provider} reasoning`);
+    assert.deepEqual(flash.supportedThinkingEfforts, ["low", "high", "max"], `${provider} efforts`);
+  }
+});
+
+test("modelSpecs carries the 1M/128K spec for glm-5.3-flash", () => {
+  const spec = MODEL_SPECS["glm-5.3-flash"];
+  assert.ok(spec, "MODEL_SPECS should include glm-5.3-flash");
+  assert.equal(spec.contextWindow, 1_000_000);
+  assert.equal(spec.maxOutputTokens, 128_000);
+  assert.equal(spec.supportsThinking, true);
+  assert.equal(spec.supportsTools, true);
+});
+
+test("GLM_PRICING covers glm-5.3-flash with GLM-5.3 parity", () => {
+  const pricing = GLM_PRICING["glm-5.3-flash"];
+  assert.ok(pricing, "GLM_PRICING should include glm-5.3-flash");
+  assert.deepEqual(pricing, GLM_PRICING["glm-5.3"]);
+});
 
 test("zai advertises the GLM-5.3 base model only (DefaultExecutor sends ids verbatim)", () => {
   const ids = modelIds("zai");

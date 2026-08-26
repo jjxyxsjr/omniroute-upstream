@@ -49,6 +49,20 @@ export const GLM_SHARED_MODELS = Object.freeze([
     supportedThinkingEfforts: ["low"],
   },
   {
+    // GLM-5.3-Flash (2026-08-26): native-multimodal variant — vision
+    // (image/video/file) with thinking that CANNOT be disabled (thinking.type
+    // only "enabled"); text params match GLM-5.3 over a 1M context window.
+    // https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash
+    id: "glm-5.3-flash",
+    name: "GLM 5.3 Flash",
+    contextLength: 1000000,
+    maxOutputTokens: 128000,
+    toolCalling: true,
+    supportsReasoning: true,
+    supportedThinkingEfforts: ["low", "high", "max"],
+    supportsVision: true,
+  },
+  {
     // GLM-5.2 has two positive effective tiers: low/medium map to high and xhigh
     // maps to max; disabling thinking remains the separate thinking toggle.
     // https://docs.z.ai/guides/capabilities/thinking

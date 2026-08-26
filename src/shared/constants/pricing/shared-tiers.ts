@@ -135,6 +135,15 @@ export const GLM_PRICING = {
     reasoning: 5,
     cache_creation: 1.2,
   },
+  // GLM-5.3-Flash (2026-08-26): coding-plan credit model; per-token rates not
+  // published — mirrored from GLM-5.3 until Z.ai lists flash pricing.
+  "glm-5.3-flash": {
+    input: 1.2,
+    output: 5,
+    cached: 0.3,
+    reasoning: 5,
+    cache_creation: 1.2,
+  },
   "glm-5.2": {
     input: 1.2,
     output: 5,
