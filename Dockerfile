@@ -242,6 +242,25 @@ ENV NODE_OPTIONS="--max-old-space-size=${OMNIROUTE_MEMORY_MB}"
 ENV DATA_DIR=/app/data
 RUN mkdir -p /app/data
 
+# nnd fork: hoist the source-independent runtime deps (apt packages + global CLI
+# tools) ABOVE the `COPY --from=builder` lines below. They previously lived in
+# runner-cli AFTER the builder-derived inputs, so ANY source change invalidated
+# the whole chain and re-paid a ~30min apt crawl plus a ~10min `npm install -g`
+# on every source-level rebuild (2026-08-26: cost the nnd.6 and first nnd.7
+# builds). Depending only on `base` keeps both layers permanently cached.
+# Side effect: the `-web` variant (runner-web) now also carries docker.io/git
+# and the CLI tools — we never build that target; trim here if that changes.
+RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+  apt-get update \
+  && apt-get install -y --no-install-recommends git ca-certificates docker.io docker-compose \
+  && rm -rf /var/lib/apt/lists/* \
+  && git config --system url."https://github.com/".insteadOf "ssh://git@github.com/"
+
+# Install CLI tools globally. Separate layer from apt for better cache reuse.
+RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
+  npm install -g --no-audit --no-fund @openai/codex @anthropic-ai/claude-code droid openclaw@latest
+
 # `npm run build` (build-next-isolated → assembleStandalone) bundles ALL runtime
 # files into .build/next/standalone/ — .next, node_modules, migrations, scripts,
 # docs, and the previously hand-COPY'd modules below (@swc/helpers, pino-*, split2,
@@ -327,26 +346,16 @@ USER node
 
 FROM runner-base AS runner-cli
 
-# Drop back to root briefly so we can install system + global npm packages,
-# then return to the `node` non-root user before the CMD inherited from
-# runner-base runs.
+# Drop back to root briefly so the builder-derived playwright COPYs land with
+# the expected ownership, then return to the `node` non-root user before the
+# CMD inherited from runner-base runs. The apt packages and global CLI tools
+# this stage used to install here now live in runner-base ABOVE the
+# COPY --from=builder inputs (source-independent layer hoisting, nnd fork).
 USER root
 
 # The CLI image can use the internal ChatGPT Web (Codex) Chromium sidecar over
 # CDP without installing a second browser in this container.
 COPY --from=builder /app/node_modules/playwright-core ./node_modules/playwright-core
 COPY --from=builder /app/node_modules/playwright ./node_modules/playwright
-
-# Install system dependencies required by openclaw (git+ssh references).
-RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,target=/var/cache/apt,sharing=locked \
-  --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-lists,target=/var/lib/apt/lists,sharing=locked \
-  apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates docker.io docker-compose \
-  && rm -rf /var/lib/apt/lists/* \
-  && git config --system url."https://github.com/".insteadOf "ssh://git@github.com/"
-
-# Install CLI tools globally. Separate layer from apt for better cache reuse.
-RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
-  npm install -g --no-audit --no-fund @openai/codex @anthropic-ai/claude-code droid openclaw@latest
 
 USER node
