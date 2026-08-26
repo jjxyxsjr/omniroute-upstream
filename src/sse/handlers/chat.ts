@@ -163,6 +163,7 @@ import {
   registerCodexQuotaFetcher,
 } from "@omniroute/open-sse/services/codexQuotaFetcher.ts";
 import { registerBailianCodingPlanQuotaFetcher } from "@omniroute/open-sse/services/bailianQuotaFetcher.ts";
+import { registerArkPlanQuotaFetcher } from "@omniroute/open-sse/services/arkQuotaFetcher.ts";
 import { registerQwenTokenPlanQuotaFetcher } from "@omniroute/open-sse/services/qwenTokenPlanQuotaFetcher.ts";
 import { registerCrofUsageFetcher } from "@omniroute/open-sse/services/crofUsageFetcher.ts";
 import { registerDeepseekQuotaFetcher } from "@omniroute/open-sse/services/deepseekQuotaFetcher.ts";
@@ -200,6 +201,14 @@ registerCodexQuotaFetcher();
 // This hooks into the quotaPreflight + quotaMonitor systems so that combos
 // can proactively switch accounts before quota is exhausted.
 registerBailianCodingPlanQuotaFetcher();
+
+// Register the Volcengine Ark Coding/Agent Plan quota fetcher (fork patch 012).
+// Control-plane OpenAPI (GetCodingPlanUsage / GetAFPUsage) with Volcengine
+// Signature V4 — credentials live on the connection (providerSpecificData,
+// enc:v1-encrypted) or the VOLC_ARK_* env fallback. Registering a fetcher for
+// the custom anthropic-compatible Ark node ALSO unblocks reset-aware
+// connection expansion (providers without fetchers expand to bare targets).
+registerArkPlanQuotaFetcher();
 
 // Register the Qwen Cloud / Model Studio personal Token Plan fetcher (#9603).
 // Cookie-authenticated console gateway — 5-hour + weekly sliding windows.
