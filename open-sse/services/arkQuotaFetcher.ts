@@ -37,6 +37,7 @@ import {
   registerQuotaWindows,
   type QuotaInfo,
 } from "./quotaPreflight.ts";
+import { registerMonitorFetcher } from "./quotaMonitor.ts";
 
 const VOLC_OPENAPI_HOST = "open.volcengineapi.com";
 const VOLC_API_VERSION = "2024-01-01";
@@ -390,6 +391,7 @@ export function registerArkPlanQuotaFetcher(providerIds?: string[]): void {
       ? process.env.OMNIROUTE_ARK_QUOTA_PROVIDERS.split(",").map((s) => s.trim()).filter(Boolean)
       : DEFAULT_ARK_QUOTA_PROVIDERS);
   for (const provider of ids) {
+    registerMonitorFetcher(provider, fetchArkPlanQuota);
     registerQuotaFetcher(provider, fetchArkPlanQuota);
     registerQuotaWindows(provider, [ARK_WINDOW_5H, ARK_WINDOW_WEEKLY, ARK_WINDOW_MONTHLY]);
   }
