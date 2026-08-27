@@ -51,12 +51,13 @@ export const GLM_SHARED_MODELS = Object.freeze([
   {
     // GLM-5.3-Flash (2026-08-26): native-multimodal variant — vision
     // (image/video/file) with thinking that CANNOT be disabled (thinking.type
-    // only "enabled"); text params match GLM-5.3 over a 1M context window.
+    // only "enabled"); text params match GLM-5.3 over a 1M context window,
+    // including the 128K (=131072) max output.
     // https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash
     id: "glm-5.3-flash",
     name: "GLM 5.3 Flash",
     contextLength: 1000000,
-    maxOutputTokens: 128000,
+    maxOutputTokens: 131072,
     toolCalling: true,
     supportsReasoning: true,
     supportedThinkingEfforts: ["low", "high", "max"],

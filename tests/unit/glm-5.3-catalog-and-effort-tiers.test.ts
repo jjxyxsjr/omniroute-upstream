@@ -149,7 +149,7 @@ test("GLM-5.3-Flash is registered on shared GLM providers (1M ctx / 128K out / v
     const flash = models.find((m) => m.id === "glm-5.3-flash");
     assert.ok(flash, `${provider} should expose glm-5.3-flash; got ${models.map((m) => m.id).join(", ")}`);
     assert.equal(flash.contextLength, 1_000_000, `${provider} context`);
-    assert.equal(flash.maxOutputTokens, 128_000, `${provider} max output`);
+    assert.equal(flash.maxOutputTokens, 131_072, `${provider} max output`);
     assert.equal(flash.supportsVision, true, `${provider} vision`);
     assert.equal(flash.supportsReasoning, true, `${provider} reasoning`);
     assert.deepEqual(flash.supportedThinkingEfforts, ["low", "high", "max"], `${provider} efforts`);
@@ -160,7 +160,7 @@ test("modelSpecs carries the 1M/128K spec for glm-5.3-flash", () => {
   const spec = MODEL_SPECS["glm-5.3-flash"];
   assert.ok(spec, "MODEL_SPECS should include glm-5.3-flash");
   assert.equal(spec.contextWindow, 1_000_000);
-  assert.equal(spec.maxOutputTokens, 128_000);
+  assert.equal(spec.maxOutputTokens, 131_072);
   assert.equal(spec.supportsThinking, true);
   assert.equal(spec.supportsTools, true);
 });
