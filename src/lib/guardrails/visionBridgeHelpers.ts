@@ -151,6 +151,11 @@ export function resolveVisionBridgeBaseUrl(model?: string): string {
 export interface ImagePart {
   messageIndex: number;
   partIndex: number;
+  /**
+   * Position inside a `tool_result` block's content array (Claude protocol
+   * tool-returned screenshots). Undefined for top-level parts.
+   */
+  innerIndex?: number;
   imageUrl: string;
   imageType: "image_url" | "image" | "url";
 }
@@ -184,8 +189,9 @@ export type RequestContentPart =
  */
 /**
  * Shapes `replaceImageParts` knows how to splice: top-level content parts
- * whose `type` is `image_url`, `image`, or `input_image`. Everything else the
- * detector reports (nested hits, `data_uri_string`, `image_indicator`) is
+ * whose `type` is `image_url`, `image`, or `input_image`, plus the same shapes
+ * nested inside a `tool_result` block's content array. Everything else the
+ * detector reports (`data_uri_string`, `image_indicator`, deeper nesting) is
  * combo-filter material only — extracting it would desync the positional
  * description consumption in visionBridge (descriptions would shift onto the
  * wrong images).
@@ -198,21 +204,72 @@ const REPLACEABLE_IMAGE_SHAPES: ReadonlySet<MediaPart["shape"]> = new Set([
 ]);
 
 export function extractImageParts(messages: RequestMessage[]): ImagePart[] {
-  // Delegates to the unified detector (open-sse/utils/mediaParts.ts) so the
-  // guardrail and the combo compatibility filter share one source of truth.
-  // Extraction is ALLOWLISTED to top-level (non-nested) parts whose shape
-  // replaceImageParts can splice back — the extract↔replace contract: every
-  // extracted part MUST be replaceable, in the same order, or the positional
-  // descriptions shift onto the wrong images.
-  return detectMediaParts(messages)
-    .filter((p) => p.kind === "image" && !p.nested && REPLACEABLE_IMAGE_SHAPES.has(p.shape))
-    .map((p) => ({
-      messageIndex: p.messageIndex,
-      partIndex: p.partIndex,
-      imageUrl: p.ref,
-      imageType:
-        p.shape === "image_base64" ? "image" : p.shape === "image_source_url" ? "url" : "image_url",
-    }));
+  // Canonical walk shared with replaceImageParts: per message, per content
+  // part — a top-level image part first, then the images nested in that part's
+  // `tool_result` content array. Both sides consume in this exact order, so
+  // description[i] always lands on the image extracted at position i.
+  //
+  // 2026-08-27 incident: Claude-protocol tool-returned screenshots live at
+  // `content[n].content[m]` and were invisible here while the combo
+  // compatibility filter still detected them — every image-bearing tool turn
+  // against an all-text combo died with capability_mismatch before the
+  // describe path could run.
+  const out: ImagePart[] = [];
+  if (!Array.isArray(messages)) return out;
+  const pushReplaceable = (
+    hits: MediaPart[],
+    messageIndex: number,
+    partIndex: number,
+    inner?: boolean
+  ) => {
+    for (const p of hits) {
+      if (p.kind !== "image" || p.nested || !REPLACEABLE_IMAGE_SHAPES.has(p.shape)) continue;
+      out.push({
+        messageIndex,
+        partIndex,
+        ...(inner ? { innerIndex: p.partIndex } : {}),
+        imageUrl: p.ref,
+        imageType:
+          p.shape === "image_base64" ? "image" : p.shape === "image_source_url" ? "url" : "image_url",
+      });
+    }
+  };
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const content = messages[messageIndex]?.content;
+    if (!Array.isArray(content)) continue;
+    for (let partIndex = 0; partIndex < content.length; partIndex++) {
+      const part = content[partIndex] as Record<string, unknown> | null | undefined;
+      if (!part || typeof part !== "object") continue;
+      // Top-level replaceable image part (shape recognition via the shared
+      // detector so extraction and the combo filter can never disagree).
+      pushReplaceable(detectMediaParts([{ role: "user", content: [part] }]), messageIndex, partIndex);
+      // Images nested inside a tool_result content array: scan the inner array
+      // as top-level content so each hit carries its own inner position.
+      if (part.type === "tool_result" && Array.isArray(part.content)) {
+        pushReplaceable(
+          detectMediaParts([{ role: "user", content: part.content as unknown[] }]),
+          messageIndex,
+          partIndex,
+          true
+        );
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * True when `value` is a content part `replaceImageParts` can splice — a
+ * replaceable image shape WITH an extractable ref. Replace must recognize
+ * exactly what extract collects (the extract↔replace contract), so a part
+ * that merely looks image-typed but yields no ref (e.g. `source.url: ""`)
+ * consumes no description.
+ */
+function isReplaceableImagePart(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  return detectMediaParts([{ role: "user", content: [value] }]).some(
+    (p) => p.kind === "image" && !p.nested && REPLACEABLE_IMAGE_SHAPES.has(p.shape)
+  );
 }
 
 // Undici fetch with a browser-ish User-Agent: Wikimedia (and other CDNs)
@@ -943,9 +1000,11 @@ export function replaceImageParts(
       // `input_image` (Responses API) is read through a widened type: it is
       // not part of the historical RequestContentPart union but MUST be
       // replaceable — extractImageParts allowlists it, and every extracted
-      // part needs a matching splice here (extract↔replace contract).
-      const partType = (part as { type?: string } | null | undefined)?.type;
-      if (partType === "image_url" || partType === "image" || partType === "input_image") {
+      // part needs a matching splice here (extract↔replace contract). The
+      // shape-aware predicate (not a bare type check) keeps replace in sync
+      // with extract: an image-typed part with no extractable ref consumes
+      // no description.
+      if (isReplaceableImagePart(part)) {
         if (descriptionIndex < descriptions.length) {
           const description = descriptions[descriptionIndex];
           descriptionIndex++;
@@ -960,6 +1019,27 @@ export function replaceImageParts(
             } as RequestContentPart);
           }
         }
+      } else if (
+        (part as { type?: string } | null | undefined)?.type === "tool_result" &&
+        Array.isArray((part as { content?: unknown }).content)
+      ) {
+        // 2026-08-27 incident: images nested in a tool_result content array
+        // (Claude protocol tool-returned screenshots). Splice descriptions in
+        // place inside the inner array, in the same inner order extract
+        // collected them. The container block (tool_use_id etc.) is preserved.
+        const toolPart = part as { type: string; content: unknown[] };
+        toolPart.content = toolPart.content.map((inner) => {
+          if (!isReplaceableImagePart(inner)) return inner;
+          if (descriptionIndex >= descriptions.length) return inner;
+          const description = descriptions[descriptionIndex];
+          descriptionIndex++;
+          if (description == null) return inner; // #4012: keep the raw image
+          return {
+            type: replacementTextType,
+            text: description,
+          } as RequestContentPart;
+        });
+        newContent.push(part as RequestContentPart);
       } else {
         newContent.push(part as RequestContentPart);
       }
