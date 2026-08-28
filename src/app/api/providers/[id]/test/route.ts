@@ -29,6 +29,7 @@ import {
 import { providerAllowsOptionalApiKey } from "@/shared/constants/providers";
 import { shouldUseApiKeyConnectionTest } from "./webSessionTestDispatch";
 import { testCodexAppServerConnection, makeDiagnosis } from "./codexAppServerHealth";
+import { testArkPlanConnection } from "./arkPlanHealth";
 import { removeConnectionHealth } from "@omniroute/open-sse/services/apiKeyRotator.ts";
 import { isConnectionUnavailableToAuxiliaryActivity } from "@/lib/exclusiveLeaseIsolation";
 import { classifyAmbiguousOrAuthError, type ClassifyFailureArgs } from "./mistralAmbiguousAuth";
@@ -1018,6 +1019,14 @@ export async function testSingleConnection(connectionId: string, validationModel
   // connection down. Returns null for non-app-server connections (fall through).
   const appServerResult = await testCodexAppServerConnection(connection);
 
+  // Ark plan nodes (volces.com/api/{coding,plan}): the generic validator would
+  // fall through to a BILLED POST /v1/messages probe (their /models 404s), which
+  // keeps the plan active around the clock and pollutes the 5h window's
+  // first-request anchor (docs/201). A positively-successful V4 control-plane
+  // quota probe is non-billed and proves plan + AK/SK + network in one call —
+  // short-circuit valid. Returns null on anything but success (fall through).
+  const arkPlanResult = await testArkPlanConnection(connection);
+
   if ((runtime as any)?.diagnosis) {
     result = {
       valid: false,
@@ -1028,6 +1037,10 @@ export async function testSingleConnection(connectionId: string, validationModel
   } else if (appServerResult) {
     result = await runWithProxyContext(proxyInfo?.proxy || null, () =>
       Promise.resolve(appServerResult)
+    );
+  } else if (arkPlanResult) {
+    result = await runWithProxyContext(proxyInfo?.proxy || null, () =>
+      Promise.resolve(arkPlanResult)
     );
   } else if (shouldUseApiKeyConnectionTest(connection.authType, provider)) {
     const enrichedConnection = validationModelId
