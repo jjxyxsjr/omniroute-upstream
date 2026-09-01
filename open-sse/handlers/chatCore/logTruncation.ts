@@ -5,6 +5,7 @@ import {
   getChatLogMaxObjectKeys,
   getChatLogMaxBodyBytes,
 } from "@/lib/logEnv";
+import { createHash } from "node:crypto";
 import { estimateSizeFast } from "../../utils/estimateSize.ts";
 
 export const MEMORY_EXTRACTION_TEXT_LIMIT = 64 * 1024;
@@ -22,9 +23,31 @@ export function truncateChatLogText(value: string): string {
   return `${head}\n[...truncated ${value.length - limit} chars...]\n${tail}`;
 }
 
+/**
+ * 2b: an oversized inline image must never be stored as a sliced base64 string.
+ * Head/tail truncation corrupts the payload irreparably (no IEND, broken mod-4
+ * length — libpng rejects it), which made every logged vision request useless
+ * for replay forensics (2026-09-01: all vision artifacts were unreadable).
+ * Collapse to compact metadata instead. Only image/* data URLs take this path;
+ * everything else keeps plain text truncation.
+ */
+export function collapseOversizedDataUrlForLog(value: string): string | Record<string, unknown> {
+  const limit = getChatLogTextLimit();
+  if (value.length <= limit) return value;
+  const match = /^data:(image\/[-\w.+/]+);base64,([\s\S]*)$/.exec(value);
+  if (!match) return truncateChatLogText(value);
+  return {
+    _omniroute_image_ref: true,
+    mime: match[1],
+    base64Bytes: match[2].length,
+    sha256: createHash("sha256").update(match[2]).digest("hex").slice(0, 16),
+    head: value.slice(0, 64),
+  };
+}
+
 export function cloneBoundedChatLogPayload(value: unknown, depth = 0): unknown {
   if (value === null || value === undefined) return value;
-  if (typeof value === "string") return truncateChatLogText(value);
+  if (typeof value === "string") return collapseOversizedDataUrlForLog(value);
   if (typeof value !== "object") return value;
   if (depth >= getChatLogMaxDepth()) return "[MaxDepth]";
 
