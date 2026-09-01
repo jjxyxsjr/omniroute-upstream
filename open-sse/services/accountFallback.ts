@@ -1289,6 +1289,23 @@ export function parseRetryFromErrorText(errorText: unknown): number | null {
     }
   }
 
+  // GLM (Zhipu) 5h-quota exhaustion text: "您的限额将在 2026-09-01 16:02:52 重置。" The
+  // wall clock is Beijing-local (UTC+8) with no zone marker — verified against
+  // quota_snapshots.next_reset_at in production (16:02:52 in the error body ==
+  // 08:02:52Z in the snapshot). A bare Date.parse would read it as UTC and
+  // over-cool the account by 8h, so the offset is appended explicitly. 在/于
+  // both accepted defensively.
+  const glmResetMatch =
+    /将[在于]\s*(\d{4}-\d{2}-\d{2})[ T](\d{1,2}:\d{2}(?::\d{2})?)\s*重置/.exec(msg);
+  if (glmResetMatch) {
+    const timePart = /^\d{1,2}:\d{2}$/.test(glmResetMatch[2]) ? `${glmResetMatch[2]}:00` : glmResetMatch[2];
+    const parsedTs = Date.parse(`${glmResetMatch[1]}T${timePart}+08:00`);
+    if (Number.isFinite(parsedTs)) {
+      const waitMs = parsedTs - Date.now();
+      if (waitMs > 0) return Math.min(waitMs, MAX_PROVIDER_COOLDOWN_MS);
+    }
+  }
+
   const match = /reset after (\d+h)?(\d+m)?(\d+s)?/i.exec(msg);
   if (match?.[1] || match?.[2] || match?.[3]) return computeDurationMs(match);
 
