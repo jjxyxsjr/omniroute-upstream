@@ -541,9 +541,32 @@ function getLimiter(provider, connectionId, model = null) {
  * @param {string} model - Model name (optional, for per-model limits)
  * @param {Function} fn - The async function to execute (e.g., executor.execute)
  * @param {AbortSignal} signal - Optional abort signal to cancel waiting
+ * @param {object} [opts]
+ * @param {number} [opts.executionExpirationMs] - Override the Bottleneck job
+ *   deadline (2a). Callers with a known non-streaming output budget pass a
+ *   scaled value; streaming keeps the default so silent streams still die.
  * @returns {Promise<unknown>} Result of fn()
  */
-export async function withRateLimit(provider, connectionId, model, fn, signal = null) {
+export function computeNonStreamExecutionExpirationMs(
+  baseMs,
+  maxTokens,
+  env = process.env
+): number {
+  const raw = env.OMNIROUTE_EXECUTION_EXPIRATION_MS;
+  if (raw !== undefined && raw !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  // 2a (nnd.11): scale the execution deadline for large NON-STREAMING
+  // generations. A max_tokens=32768 non-stream vision request was killed at
+  // the legacy 120s while the upstream was legitimately generating (ten 504s
+  // in a row, 2026-09-01). ~20ms/token is a conservative decode floor; the
+  // result is clamped to [baseMs, 15min].
+  const budgetMs = Number(maxTokens) > 0 ? Number(maxTokens) * 20 : 0;
+  return Math.max(baseMs, Math.min(budgetMs, 900_000));
+}
+
+export async function withRateLimit(provider, connectionId, model, fn, signal = null, opts) {
   if (!enabledConnections.has(connectionId)) {
     return fn();
   }
@@ -556,6 +579,14 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
     throw err;
   }
 
+  /**
+   * 2a (nnd.11): scale the execution deadline for large NON-STREAMING
+   * generations. A max_tokens=32768 non-stream vision request was killed at
+   * the legacy 120s while the upstream was legitimately generating (ten 504s
+   * in a row, 2026-09-01). ~20ms/token is a conservative decode floor; the
+   * result is clamped to [baseMs, 15min]. OMNIROUTE_EXECUTION_EXPIRATION_MS
+   * overrides everything (0 = deadline off).
+   */
   // Proactive sliding-window fallback for header-less providers with a declared cap
   // (Fase 8.2). No-op unless PROVIDER_DEFAULT_RATE_LIMITS has an entry for `provider`.
   const maxWaitMs = resolveRequestQueueMaxWaitMs(provider, undefined, connectionId);
@@ -564,8 +595,9 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
   const limiter = getLimiter(provider, connectionId, model);
   // Bottleneck's `expiration` starts only after a job leaves QUEUED. The
   // legacy maxWaitMs setting therefore bounds limiter-managed execution; it
-  // is not a queue-wait deadline.
-  const executionExpirationMs = maxWaitMs;
+  // is not a queue-wait deadline. 2a: callers may scale it for large
+  // non-streaming generations via opts.executionExpirationMs.
+  const executionExpirationMs = opts?.executionExpirationMs ?? maxWaitMs;
   const scheduleOpts =
     executionExpirationMs && executionExpirationMs > 0 ? { expiration: executionExpirationMs } : {};
 

@@ -393,6 +393,8 @@ import {
   updateFromHeaders,
   updateFromResponseBody,
   initializeRateLimits,
+  computeNonStreamExecutionExpirationMs,
+  resolveRequestQueueMaxWaitMs,
 } from "../services/rateLimitManager.ts";
 import * as localLimiterErrors from "../services/rateLimitManager/errors.ts";
 import {
@@ -3117,7 +3119,18 @@ export async function handleChatCore({
                       ),
                   });
                 },
-                streamController.signal
+                streamController.signal,
+                // 2a: scale the execution deadline for large non-streaming
+                // generations instead of killing them at the legacy 120s while
+                // the upstream is legitimately still generating.
+                bodyToSend?.stream === true
+                  ? undefined
+                  : {
+                      executionExpirationMs: computeNonStreamExecutionExpirationMs(
+                        resolveRequestQueueMaxWaitMs(provider, undefined, attemptConnectionId),
+                        Number(bodyToSend?.max_tokens ?? bodyToSend?.max_output_tokens ?? 0)
+                      ),
+                    }
               );
               const res = normalizeExecutorResult(rawExecutorResult);
               trace("post_executor", { status: res?.response?.status });
