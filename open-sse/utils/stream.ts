@@ -2877,6 +2877,9 @@ export function createSSEStream(options: StreamOptions = {}) {
                 status: 200,
                 usage: state?.usage,
                 responseBody,
+                ttft: timing.ttftMs(),
+                itlMs: timing.avgItlMs(),
+                interrupted: timing.interrupted,
                 // Same OPENAI_RESPONSES carve-out as the passthrough branch above —
                 // the synthesized chat-shaped responseBody drops the `response` object,
                 // and (like the passthrough branch) never carries an `object` marker at
