@@ -853,6 +853,32 @@ function shouldRunStartupDbHealthCheck(): boolean {
   return !isAutomatedTestProcess();
 }
 
+/** Prune-on-create retention (nnd.11 plan B): keep the newest `keep` backups of
+ * a given reason, delete older same-reason files. Restic/pgbackrest-style — the
+ * retention runs with the backup itself, so no external cron can fall behind.
+ * Applied backups fire ~4x/day at ~1x DB size each; without pruning the
+ * 14-day host-side find window ballooned toward 30G+. */
+export function pruneManagedDbBackups(reason: string, keep = 3, dirOverride?: string): number {
+  try {
+    const backupDir = dirOverride || DB_BACKUPS_DIR || path.join(DATA_DIR, "db_backups");
+    if (!fs.existsSync(backupDir)) return 0;
+    const prefix = `db_`;
+    const suffix = `_${reason}.sqlite`;
+    const stale = fs
+      .readdirSync(backupDir)
+      .filter((name) => name.startsWith(prefix) && name.endsWith(suffix))
+      .map((name) => ({ name, mtime: fs.statSync(path.join(backupDir, name)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(keep);
+    for (const entry of stale) {
+      fs.unlinkSync(path.join(backupDir, entry.name));
+    }
+    return stale.length;
+  } catch {
+    return 0;
+  }
+}
+
 function createManagedDbBackup(db: SqliteDatabase, reason: string): boolean {
   const isTest = isAutomatedTestProcess();
   if (isTest) return false;
@@ -869,6 +895,7 @@ function createManagedDbBackup(db: SqliteDatabase, reason: string): boolean {
 
     db.exec(`VACUUM INTO '${escapedBackupPath}'`);
     console.log(`[DB] Backup created (${reason}): ${backupPath}`);
+    pruneManagedDbBackups(reason);
     return true;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
