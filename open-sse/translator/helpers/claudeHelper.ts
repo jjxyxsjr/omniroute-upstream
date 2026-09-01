@@ -15,6 +15,28 @@ export { NON_ANTHROPIC_THINKING_PLACEHOLDER } from "../../utils/reasoningPlaceho
 // Ported from upstream decolua/9router#820 by @hiepau1231.
 const CLAUDE_FORMAT_PROVIDERS_WITHOUT_OUTPUT_CONFIG = new Set<string>(["minimax", "minimax-cn"]);
 
+/**
+ * Claude-compat providers whose upstreams reject `redacted_thinking` blocks
+ * outright (nnd.11; first seen on Volcano ark 2026-08-31: whitelist is
+ * text/thinking/image/…). Real Anthropic upstreams MUST keep the blocks
+ * verbatim — they validate signatures and 400 on any modification — so this
+ * is an explicit env allowlist (OMNIROUTE_NO_REDACTED_THINKING_PROVIDERS,
+ * comma-separated provider IDs) instead of a prefix guess. Listed providers
+ * fall back to plain-thinking conversion (reasoningCache text or placeholder).
+ */
+export function resolveProvidersWithoutRedactedThinking(
+  env: Pick<NodeJS.ProcessEnv, "OMNIROUTE_NO_REDACTED_THINKING_PROVIDERS"> = process.env
+): Set<string> {
+  const raw = env.OMNIROUTE_NO_REDACTED_THINKING_PROVIDERS;
+  if (!raw) return new Set();
+  return new Set(
+    raw
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+  );
+}
+
 // Placeholder thinking text used as last-resort fallback when:
 //   - Target upstream is a non-Anthropic Claude-shape provider
 //     (kimi-coding, glmt, zai, …) that rejects redacted_thinking blobs
@@ -382,7 +404,11 @@ export function prepareClaudeRequest(
   // endpoint that validates signatures — so it needs redacted_thinking too.
   const modelTargetsClaude =
     !!provider && !!model && getModelTargetFormat(provider, model) === "claude";
-  const supportsRedactedThinking = !isKimiCoding && (supportsPromptCaching || modelTargetsClaude);
+  const noRedactedProviders = resolveProvidersWithoutRedactedThinking();
+  const supportsRedactedThinking =
+    !isKimiCoding &&
+    !noRedactedProviders.has(String(provider || "")) &&
+    (supportsPromptCaching || modelTargetsClaude);
 
   const systemBlocks = body.system;
   if (systemBlocks && Array.isArray(systemBlocks) && !preserveCacheControl) {
