@@ -18,7 +18,7 @@ import { getHiddenModelsByProvider } from "../../../src/lib/db/models";
 import { getComboModelString, normalizeComboStep } from "../../../src/lib/combos/steps.ts";
 import { getProviderByAlias, getProviderById } from "../../../src/shared/constants/providers.ts";
 import { estimateTokens } from "../contextManager.ts";
-import { containsMediaKind } from "../../utils/mediaParts.ts";
+import { containsMediaKind, detectMediaParts } from "../../utils/mediaParts.ts";
 import { getResolvedModelCapabilities } from "../modelCapabilities.ts";
 import { parseModel, stripContextWindowSuffix } from "../model.ts";
 import { dedupeTargetsByExecutionKey, isRecord } from "./comboData.ts";
@@ -510,6 +510,68 @@ function valueContainsImagePart(value: unknown): boolean {
   // matching for the whole session (capability_mismatch sticking, deploy
   // docs/060 2026-08-24 16:20 entry).
   return containsMediaKind([{ content: [value] }], "image", { structuredOnly: true });
+}
+
+// ─── 2e/2f media guardrails (nnd.11) ─────────────────────────────────────────
+
+const DEFAULT_MAX_IMAGES_PER_REQUEST = 10;
+
+export type MediaGuardrailViolation = {
+  code: "mixed_media_not_supported" | "too_many_images";
+  message: string;
+};
+
+/** OMNIROUTE_MAX_IMAGES_PER_REQUEST: per-request inline image cap. 0 = off. */
+export function resolveMaxImagesPerRequest(
+  env: Pick<NodeJS.ProcessEnv, "OMNIROUTE_MAX_IMAGES_PER_REQUEST"> = process.env
+): number {
+  const raw = env.OMNIROUTE_MAX_IMAGES_PER_REQUEST;
+  if (raw === undefined || raw === "") return DEFAULT_MAX_IMAGES_PER_REQUEST;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_MAX_IMAGES_PER_REQUEST;
+  return Math.floor(parsed);
+}
+
+/**
+ * Hard pre-dispatch checks that would otherwise surface as an opaque upstream
+ * 400 (GLM-V "图片输入格式/解析错误", code 1210):
+ *   - 2e: images mixed with video/audio blocks in one request — GLM-V docs
+ *     forbid mixing media kinds in a single request.
+ *   - 2f: more inline images than OMNIROUTE_MAX_IMAGES_PER_REQUEST (default
+ *     10; community norm + GLM-V multi-image fragility zai-org/GLM-V#232).
+ * The count cap is capacity policy (0 disables it); the mixed-media rule is
+ * correctness and always stays on.
+ */
+export function checkRequestMediaGuardrails(
+  body: Record<string, unknown>,
+  maxImages: number = resolveMaxImagesPerRequest()
+): MediaGuardrailViolation | null {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const input = Array.isArray(body.input) ? body.input : [];
+  const parts = [
+    ...detectMediaParts(messages as { role?: string; content?: unknown }[]),
+    ...detectMediaParts(input as { role?: string; content?: unknown }[]),
+  ];
+  if (parts.length === 0) return null;
+
+  const imageCount = parts.filter((p) => p.kind === "image").length;
+  const hasNonImage = parts.some((p) => p.kind === "video" || p.kind === "audio");
+  if (imageCount > 0 && hasNonImage) {
+    return {
+      code: "mixed_media_not_supported",
+      message:
+        "This request mixes images with video/audio content, which upstream models do not " +
+        "support in a single request — please send only one kind of media per request.",
+    };
+  }
+  if (maxImages > 0 && imageCount > maxImages) {
+    return {
+      code: "too_many_images",
+      message: `This request carries ${imageCount} images, exceeding the per-request limit of ` +
+        `${maxImages} — please reduce the number of inline images.`,
+    };
+  }
+  return null;
 }
 
 export function deriveRequestCompatibilityRequirements(

@@ -43,6 +43,7 @@ import type { ResilienceSettings } from "../../../src/lib/resilience/settings";
 import { applyStrategyOrdering } from "./applyStrategyOrdering.ts";
 import { clampComboDepth } from "./comboPredicates.ts";
 import {
+  checkRequestMediaGuardrails,
   describeCapabilityFilterExhaustion,
   filterTargetsByRequestCompatibility,
   resolveComboTargets,
@@ -488,6 +489,26 @@ async function applyContinuityFilters(
     (settings as { compatFilterFailOpen?: unknown } | null | undefined)?.compatFilterFailOpen ===
       true;
   const preCompatTargets = orderedTargets;
+  // 2e/2f (nnd.11): fail fast on media shapes upstreams reject wholesale
+  // (mixed media kinds / over the image-count cap) with an actionable message
+  // instead of an opaque upstream 400.
+  const mediaGuard = checkRequestMediaGuardrails(body as Record<string, unknown>);
+  if (mediaGuard) {
+    return {
+      earlyResponse: errorResponseWithComboDiagnostics(
+        400,
+        mediaGuard.message,
+        {
+          poolSize: preCompatTargets.length,
+          attempted: 0,
+          excluded: [],
+          attemptOrder: [],
+          terminalReason: "media_guardrail",
+        },
+        { code: mediaGuard.code, type: "invalid_request_error" }
+      ),
+    };
+  }
   orderedTargets = filterTargetsByRequestCompatibility(orderedTargets, body, log, undefined, {
     failOpen: compatFilterFailOpen,
   });
