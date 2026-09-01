@@ -132,7 +132,9 @@ async function testConnection(
     oldStatus = prev?.status;
   } catch {}
   try {
-    const result = await testSingleConnection(connectionId);
+    // forceRefresh: the hourly health sweep is the canonical prober (017 keeps
+    // it intact) — only dashboard-initiated loops go through the debounce.
+    const result = await testSingleConnection(connectionId, undefined, { forceRefresh: true });
 
     // Deliberate skips never rewrite credential health or failure state.
     // Unsupported validation capability is stable enough to honor the

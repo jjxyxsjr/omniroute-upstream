@@ -15,6 +15,7 @@ import { buildQoderCliNotFoundHint } from "@omniroute/open-sse/services/qoderCli
 // Use the shared open-sse token refresh with built-in dedup/race-condition cache
 import { getAccessToken } from "@omniroute/open-sse/services/tokenRefresh.ts";
 import { rotationGroupFor } from "@omniroute/open-sse/services/refreshSerializer.ts";
+import { getSharedConnectionTestDebounce } from "@/lib/connectionTestDebounce";
 import { saveCallLog } from "@/lib/usageDb";
 import { shouldHideLogs } from "@/lib/tokenHealthCheck";
 import { logProxyEvent } from "@/lib/proxyLogger";
@@ -46,6 +47,8 @@ import { CLI_RUNTIME_PROVIDER_MAP } from "./cliRuntimeProviderMap";
 /** POST body is optional; when present, only known fields are validated. */
 const providerConnectionTestBodySchema = z.object({
   validationModelId: z.string().max(500).optional(),
+  /** Bypass the 017 debounce for operator-initiated tests. */
+  forceRefresh: z.boolean().optional(),
 });
 
 function toSafeMessage(value: any, fallback = "Unknown error"): string {
@@ -967,7 +970,7 @@ async function testApiKeyConnection(connection: any) {
  * @param {string} validationModelId Optional custom model ID to test connection with
  * @returns {Promise<object>} Test result (same shape as the JSON response)
  */
-export async function testSingleConnection(connectionId: string, validationModelId?: string) {
+async function runConnectionTest(connectionId: string, validationModelId?: string) {
   const connection = await getCachedProviderConnectionById(connectionId);
 
   if (!connection) {
@@ -1194,6 +1197,32 @@ export async function testSingleConnection(connectionId: string, validationModel
   };
 }
 
+/**
+ * Debounced connection test (017). A dashboard tab left open re-fires the
+ * batch loop every ~300s; within the debounce window the previous completed
+ * result is replayed (debounced: true) with no upstream call, no DB health
+ * mutation, and no call_logs write. The scheduler and the operator's Test
+ * button pass forceRefresh to always run a real probe. Only completed tests
+ * (testedAt set) are cached — early outs like "not found" or a lease deferral
+ * stay uncached.
+ */
+export async function testSingleConnection(
+  connectionId: string,
+  validationModelId?: string,
+  options?: { forceRefresh?: boolean }
+) {
+  const debounce = getSharedConnectionTestDebounce();
+  const cached = debounce.lookup(connectionId, { forceRefresh: options?.forceRefresh });
+  if (cached) {
+    return { ...(cached.result as Record<string, unknown>), debounced: true };
+  }
+  const result = await runConnectionTest(connectionId, validationModelId);
+  if (result && typeof result === "object" && (result as { testedAt?: unknown }).testedAt) {
+    debounce.record(connectionId, result, (result as { valid?: unknown }).valid !== true);
+  }
+  return result;
+}
+
 // POST /api/providers/[id]/test - Test connection
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -1209,9 +1238,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (isValidationFailure(validation)) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
-    const { validationModelId } = validation.data;
+    const { validationModelId, forceRefresh } = validation.data;
 
-    const data = await testSingleConnection(id, validationModelId);
+    const data = await testSingleConnection(id, validationModelId, { forceRefresh });
 
     if (data.error === "Connection not found") {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
