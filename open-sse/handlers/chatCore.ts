@@ -5630,6 +5630,9 @@ export async function handleChatCore({
       claudeCacheMeta: claudePromptCacheLogMeta,
       claudeCacheUsageMeta: cacheUsageLogMeta,
       cacheSource: "upstream",
+      // 2g: first-token latency lands in call_logs.ttft_ms for streaming rows
+      // (non-stream rows stay null — duration already covers them end-to-end).
+      ttftMs: typeof ttft === "number" && Number.isFinite(ttft) && ttft >= 0 ? ttft : null,
     });
 
     recordStreamingCost({
