@@ -3970,11 +3970,6 @@
       "count": 3
     }
   },
-  "tests/unit/claude-to-openai-image-toolresult.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 8
-    }
-  },
   "tests/unit/claude-web-auto-refresh.test.ts": {
     "@typescript-eslint/no-unused-vars": {
       "count": 1

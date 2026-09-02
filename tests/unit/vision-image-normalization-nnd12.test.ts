@@ -20,8 +20,32 @@ const {
   normalizeVisionImagesInBody,
 } = await import("../../open-sse/utils/visionImageNormalization.ts");
 
+interface SharpMeta {
+  width?: number;
+  height?: number;
+  format?: string;
+  hasAlpha?: boolean;
+  isProgressive?: boolean;
+}
+interface SharpInstance {
+  metadata(): Promise<SharpMeta>;
+  toBuffer(): Promise<Buffer>;
+}
+interface SharpCreateOptions {
+  create: {
+    width: number;
+    height: number;
+    channels: number;
+    background: string;
+  };
+}
+type SharpFactory = {
+  (input: Buffer, opts?: unknown): SharpInstance;
+  (opts: SharpCreateOptions): { png(): SharpInstance; jpeg(opts?: { quality?: number }): SharpInstance };
+};
+
 const sharp = (await import("sharp").then((m) => m.default ?? m).catch(() => null)) as
-  | ((input: Buffer, opts?: unknown) => any)
+  | SharpFactory
   | null;
 
 test("2c env switch: default on; 0/false disables; 1/true enables", () => {
@@ -114,12 +138,25 @@ test("2c body walker rewrites OpenAI image_url and Claude source data URIs, leav
   assert.equal(stats.normalized, 2, "one OpenAI-form + one Claude-form image normalized");
   assert.equal(stats.skipped, 0, "remote URLs are not attempted (not downloaded, not counted)");
 
-  const openaiUrl = (body.messages[1] as any).content.find((p: any) => p.type === "image_url" && p.image_url.url.startsWith("data:")).image_url.url;
+  interface ContentPart {
+    type: string;
+    text?: string;
+    image_url?: { url: string };
+    source?: { type: string; media_type: string; data: string };
+  }
+  const typedMessages = body.messages as { role: string; content: string | ContentPart[] }[];
+  const openaiUrl = (typedMessages[1].content as ContentPart[]).find(
+    (p) => p.type === "image_url" && p.image_url?.url.startsWith("data:")
+  )?.image_url?.url;
+  assert.ok(openaiUrl, "data-URI part survived");
   assert.notEqual(openaiUrl, dataUri, "oversized data URI was rewritten");
   assert.match(openaiUrl, /^data:image\/png;base64,/);
 
-  const claudeBlock = (body.messages[2] as any).content.find((p: any) => p.type === "image");
-  const rewritten = Buffer.from(claudeBlock.source.data, "base64");
+  const claudeBlock = (typedMessages[2].content as ContentPart[]).find(
+    (p) => p.type === "image"
+  );
+  assert.ok(claudeBlock?.source?.data, "Claude-form image block present");
+  const rewritten = Buffer.from(claudeBlock!.source!.data, "base64");
   const meta = await sharp(rewritten).metadata();
   assert.ok((meta.width ?? 0) <= 4096, "Claude-form image also normalized");
 });
@@ -138,8 +175,9 @@ test("2c garbage data URIs are skipped, never thrown", async () => {
   const stats = await normalizeVisionImagesInBody(body);
   assert.equal(stats.normalized, 0);
   assert.equal(stats.skipped, 1);
+  const part = (body.messages[0].content as { type: string; image_url: { url: string } }[])[0];
   assert.equal(
-    (body.messages[0] as any).content[0].image_url.url,
+    part.image_url.url,
     "data:image/png;base64,not-really-base64!!!",
     "garbage passed through untouched (fail-open)"
   );
