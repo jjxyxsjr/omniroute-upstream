@@ -510,6 +510,13 @@ async function saveCallLogOperation(entry: any): Promise<void> {
         typeof entry.ttftMs === "number" && Number.isFinite(entry.ttftMs) && entry.ttftMs >= 0
           ? Math.round(entry.ttftMs)
           : null,
+      // 2g-a: admission→dispatch gap (semaphore + rate-limit queueing included).
+      queueWaitMs:
+        typeof entry.queueWaitMs === "number" &&
+        Number.isFinite(entry.queueWaitMs) &&
+        entry.queueWaitMs >= 0
+          ? Math.round(entry.queueWaitMs)
+          : null,
     };
 
     const requestSummary = noLogEnabled
@@ -558,7 +565,8 @@ async function saveCallLogOperation(entry: any): Promise<void> {
         combo_name, combo_step_id, combo_execution_key, error_summary, detail_state,
         artifact_relpath, artifact_size_bytes, artifact_sha256,
         has_request_body, has_response_body, has_pipeline_details, request_summary,
-        correlation_id, model_pinned, session_tag, response_id, error_type, ttft_ms
+        correlation_id, model_pinned, session_tag, response_id, error_type, ttft_ms,
+        queue_wait_ms
       )
       VALUES (
         @id, @timestamp, @method, @path, @status, @model, @requestedModel, @provider,
@@ -569,7 +577,8 @@ async function saveCallLogOperation(entry: any): Promise<void> {
         @comboName, @comboStepId, @comboExecutionKey, @errorSummary, @detailState,
         @artifactRelPath, @artifactSizeBytes, @artifactSha256,
         @hasRequestBody, @hasResponseBody, @hasPipelineDetails, @requestSummary,
-        @correlationId, @modelPinned, @sessionTag, @responseId, @errorType, @ttftMs
+        @correlationId, @modelPinned, @sessionTag, @responseId, @errorType, @ttftMs,
+        @queueWaitMs
       )
     `
     ).run({

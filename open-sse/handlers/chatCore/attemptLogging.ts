@@ -79,6 +79,12 @@ export type PersistAttemptLogsContext = {
    * explicitly present (never synthesized from skillRequestId) — persisted as call_logs.session_tag
    * for per-session cost attribution. */
   sessionTag?: string | null;
+  /**
+   * 2g-a: admission→dispatch gap in ms, read lazily at persist time so every
+   * call site (streaming completion AND the many non-stream error exits)
+   * reports queueing without threading the value through each one.
+   */
+  getQueueWaitMs?: () => number | null;
 };
 
 function toConnectionId(value: unknown): string | null {
@@ -195,6 +201,7 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
     correlationId,
     modelPinned,
     sessionTag,
+    getQueueWaitMs,
   } = ctx;
   const initialConnectionId = toConnectionId(connectionId);
   const finalConnectionId = toConnectionId(credentials?.connectionId) || initialConnectionId;
@@ -313,6 +320,10 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
     sessionTag: sessionTag || null,
     responseId: extractResponsesId(sourceFormat, clientResponse),
     ttftMs: typeof ttftMs === "number" && Number.isFinite(ttftMs) && ttftMs >= 0 ? ttftMs : null,
+    queueWaitMs: (() => {
+      const q = getQueueWaitMs?.();
+      return typeof q === "number" && Number.isFinite(q) && q >= 0 ? q : null;
+    })(),
   }).catch(() => {});
 
   // Emit the terminal request-lifecycle event to the live dashboard bus. `request.started`

@@ -7,7 +7,16 @@ type StreamReadinessLogger = {
 };
 
 export type StreamReadinessResult =
-  | { ok: true; response: Response }
+  | {
+      ok: true;
+      response: Response;
+      /**
+       * Wall-clock moment the first non-ping content event arrived at the
+       * gateway (2g-a). chatCore pairs it with the dispatch timestamp to get
+       * real TTFT; absent when readiness was established without new reads.
+       */
+      firstContentEventAt?: number;
+    }
   | {
       ok: false;
       response: Response;
@@ -491,6 +500,9 @@ export async function ensureStreamReadiness(
   const effectiveTimeoutMs = Math.max(0, Math.floor(options.timeoutMs));
   const deadline = startedAt + effectiveTimeoutMs;
   let handedOffReader = false;
+  // Arrival moment of the most recent upstream chunk (2g-a): when the readiness
+  // signal fires, this is when the first content event reached the gateway.
+  let lastChunkAt: number | null = null;
 
   const buildReadyResponse = () =>
     new Response(prependBufferedChunks(chunks, reader), {
@@ -556,11 +568,11 @@ export async function ensureStreamReadiness(
         const tail = decoder.decode(undefined, { stream: false });
         if (tail && appendStreamReadinessSignal(readinessState, tail)) {
           handedOffReader = true;
-          return { ok: true, response: buildReadyResponse() };
+          return { ok: true, response: buildReadyResponse(), firstContentEventAt: lastChunkAt ?? undefined };
         }
         if (finishStreamReadinessSignal(readinessState)) {
           handedOffReader = true;
-          return { ok: true, response: buildReadyResponse() };
+          return { ok: true, response: buildReadyResponse(), firstContentEventAt: lastChunkAt ?? undefined };
         }
 
         const classificationReason = "Stream ended before producing a non-ping SSE event";
@@ -591,6 +603,7 @@ export async function ensureStreamReadiness(
 
       if (!readResult.value) continue;
       chunks.push(readResult.value);
+      lastChunkAt = Date.now();
       const decodedChunk = decoder.decode(readResult.value, { stream: true });
 
       if (appendStreamReadinessSignal(readinessState, decodedChunk)) {
@@ -602,6 +615,7 @@ export async function ensureStreamReadiness(
         return {
           ok: true,
           response: buildReadyResponse(),
+          firstContentEventAt: lastChunkAt ?? undefined,
         };
       }
     }

@@ -698,3 +698,57 @@ test("hasUsefulStreamContent detects thinking[] and reasoning_details (#2520)", 
     true
   );
 });
+
+/**
+ * 2g-a (nnd.12) — readiness must report WHEN the first content event arrived,
+ * so chatCore can compute real TTFT (dispatch → first upstream content) instead
+ * of the buffer-replay delta nnd.11 shipped (p50=2ms in production).
+ */
+test("2g-a ensureStreamReadiness reports firstContentEventAt on a ready stream", async () => {
+  const before = Date.now();
+  const response = new Response(
+    streamFromChunks([
+      ': keepalive\n\n',
+      'event: provider.lifecycle\ndata: {"ok":true}',
+    ]),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } }
+  );
+  const result = await ensureStreamReadiness(response, { timeoutMs: 2_000 });
+  assert.equal(result.ok, true);
+  if (result.ok !== true) return;
+  assert.equal(
+    typeof result.firstContentEventAt,
+    "number",
+    "ready streams carry the first-content timestamp"
+  );
+  assert.ok(
+    (result.firstContentEventAt as number) >= before && (result.firstContentEventAt as number) <= Date.now(),
+    "firstContentEventAt is a wall-clock moment inside the call window"
+  );
+});
+
+test("2g-a ensureStreamReadiness timeout failure carries no firstContentEventAt", async () => {
+  const response = new Response(neverEndingStream(), {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+  const result = await ensureStreamReadiness(response, { timeoutMs: 30 });
+  assert.equal(result.ok, false);
+  if (result.ok !== false) return;
+  assert.equal(
+    (result as { firstContentEventAt?: number }).firstContentEventAt,
+    undefined,
+    "failure result must not claim a first-content moment"
+  );
+});
+
+function neverEndingStream(): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      controller.enqueue(encoder.encode(": ping\n\n"));
+      // Never resolves further: the readiness deadline must fire instead.
+      await new Promise(() => {});
+      controller.close();
+    },
+  });
+}

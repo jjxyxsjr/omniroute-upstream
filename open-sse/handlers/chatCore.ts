@@ -543,6 +543,12 @@ export async function handleChatCore({
   );
   const isModelScope = () => isModelScopeProvider(provider, credentials?.providerSpecificData);
   const startTime = Date.now();
+  // 2g-a timing anchors: when the (final) attempt was actually dispatched
+  // upstream (rate-limit slot acquired, fetch about to leave) and when the
+  // first upstream content event arrived (set after ensureStreamReadiness).
+  // TTFT = firstContent − dispatch; queue_wait = dispatch − startTime.
+  let upstreamDispatchedAt: number | null = null;
+  let upstreamFirstContentAt: number | null = null;
   // Per-request trace id + checkpoint helper. Lets us see exactly which await
   // a hung request was sitting on in `[STAGE_TRACE]` log lines. Uses crypto RNG
   // (not Math.random) purely to satisfy CodeQL js/insecure-randomness — this id
@@ -1038,6 +1044,8 @@ export async function handleChatCore({
       // client explicitly sent x-omniroute-session-id. The raw header remains a
       // fallback for any caller that somehow bypassed conversationId resolution.
       sessionTag: conversationId || explicitSessionIdHeader,
+      getQueueWaitMs: () =>
+        upstreamDispatchedAt !== null ? upstreamDispatchedAt - startTime : null,
     });
 
   // Primary path: merge client model id + alias target so config on either key applies; resolved
@@ -3087,6 +3095,7 @@ export async function handleChatCore({
                     stage: "rate_limit_slot_acquired",
                   });
                   assertManagedLeaseFence(attemptConnectionId);
+                  upstreamDispatchedAt = Date.now();
                   return executeWithUpstreamStartTimeout({
                     executor,
                     provider,
@@ -5418,6 +5427,9 @@ export async function handleChatCore({
     };
   }
   providerResponse = streamReadiness.response;
+  if (streamReadiness.firstContentEventAt !== undefined) {
+    upstreamFirstContentAt = streamReadiness.firstContentEventAt;
+  }
 
   // Notify success - caller can clear error status if needed
   if (onRequestSuccess) {
@@ -5474,6 +5486,15 @@ export async function handleChatCore({
       if (streamFailureCompletionRecorded) return;
       streamFailureCompletionRecorded = true;
     }
+    // 2g-a rework: nnd.11's ttft (first client forward − transform start) was a
+    // buffer-replay delta (p50=2ms in production) because ensureStreamReadiness
+    // had already drained and replayed the first upstream chunks. The real TTFT
+    // is first-upstream-content − dispatch; fall back to the old value only for
+    // bypass executors whose streams never went through the readiness gate.
+    const effectiveTtft =
+      upstreamFirstContentAt !== null && upstreamDispatchedAt !== null
+        ? Math.max(0, upstreamFirstContentAt - upstreamDispatchedAt)
+        : ttft;
     const cacheUsageLogMeta = buildCacheUsageLogMeta(streamUsage);
     const streamConnectionId = getCurrentConnectionId();
 
@@ -5562,7 +5583,7 @@ export async function handleChatCore({
       model,
       streamStatus: normalizedStreamStatus,
       startTime,
-      ttft,
+      ttft: effectiveTtft,
       streamErrorCode,
       connectionId: streamConnectionId,
       apiKeyInfo,
@@ -5581,7 +5602,10 @@ export async function handleChatCore({
         model: model || "unknown",
         strategy: isCombo ? (comboStrategy ?? "combo") : "direct",
         latencyMs: Date.now() - startTime,
-        ttftMs: typeof ttft === "number" && Number.isFinite(ttft) && ttft >= 0 ? ttft : null,
+        ttftMs:
+          typeof effectiveTtft === "number" && Number.isFinite(effectiveTtft) && effectiveTtft >= 0
+            ? effectiveTtft
+            : null,
         itlMs:
           typeof streamItlMs === "number" && Number.isFinite(streamItlMs) && streamItlMs >= 0
             ? streamItlMs
@@ -5632,7 +5656,10 @@ export async function handleChatCore({
       cacheSource: "upstream",
       // 2g: first-token latency lands in call_logs.ttft_ms for streaming rows
       // (non-stream rows stay null — duration already covers them end-to-end).
-      ttftMs: typeof ttft === "number" && Number.isFinite(ttft) && ttft >= 0 ? ttft : null,
+      ttftMs:
+        typeof effectiveTtft === "number" && Number.isFinite(effectiveTtft) && effectiveTtft >= 0
+          ? effectiveTtft
+          : null,
     });
 
     recordStreamingCost({

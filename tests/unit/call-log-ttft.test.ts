@@ -67,3 +67,41 @@ test("garbage ttftMs values persist as null", async () => {
   };
   assert.equal(row.ttft_ms, null);
 });
+
+/**
+ * 2g-a (nnd.12) — queue_wait_ms finally carries data. The column existed since
+ * migration 163 but no writer ever populated it (all NULL in production);
+ * the admission→dispatch gap is now wired through persistAttemptLogs.
+ */
+test("2g-a saveCallLog persists queue_wait_ms and nulls garbage", async () => {
+  const db = getDbInstance();
+  const base = {
+    method: "POST",
+    path: "/v1/chat/completions",
+    status: 200,
+    model: "test-model",
+    provider: "test-provider",
+    duration: 5_000,
+    tokens: {},
+  };
+  const waitedId = `test-qwait-${Date.now()}-w`;
+  const noWaitId = `test-qwait-${Date.now()}-n`;
+  const garbageId = `test-qwait-${Date.now()}-g`;
+
+  await saveCallLog({ ...base, id: waitedId, queueWaitMs: 321.7 });
+  await saveCallLog({ ...base, id: noWaitId });
+  await saveCallLog({ ...base, id: garbageId, queueWaitMs: Number.NaN });
+
+  const w = db.prepare("SELECT queue_wait_ms FROM call_logs WHERE id = ?").get(waitedId) as {
+    queue_wait_ms: number | null;
+  };
+  const n = db.prepare("SELECT queue_wait_ms FROM call_logs WHERE id = ?").get(noWaitId) as {
+    queue_wait_ms: number | null;
+  };
+  const g = db.prepare("SELECT queue_wait_ms FROM call_logs WHERE id = ?").get(garbageId) as {
+    queue_wait_ms: number | null;
+  };
+  assert.equal(w.queue_wait_ms, 322, "rounded integer persisted");
+  assert.equal(n.queue_wait_ms, null, "absent queueWaitMs stays null");
+  assert.equal(g.queue_wait_ms, null, "NaN queueWaitMs stays null");
+});
