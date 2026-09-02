@@ -91,6 +91,7 @@ import {
   safeLogEvents,
   applyExecutorProxyToInfo,
   shouldRetryStreamEarlyEof,
+  shouldSwitchConnectionOnStreamReadinessTimeout,
   withSessionHeader,
   withSelectedConnectionHeader,
   withCorrelationId,
@@ -1592,6 +1593,9 @@ async function handleSingleModelChat(
   // re-attempt to exactly one for the whole request. Declared outside both retry
   // loops so it can never reset and loop.
   let streamEarlyEofRetries = 0;
+  // 8b (nnd.12): per-request counter bounding the readiness-timeout connection
+  // switch to exactly one. Same "declared outside the loops" discipline.
+  let streamReadinessSwitchRetries = 0;
   const sameAccountTransportRetries = new Map<string, number>();
   const occupancySessionKey =
     runtimeOptions.sessionAffinityKey ?? runtimeOptions.sessionId ?? `request:${randomUUID()}`;
@@ -1997,6 +2001,34 @@ async function handleSingleModelChat(
           );
           // Plain re-attempt of the same request: no markAccountUnavailable, no
           // excludedConnectionIds mutation (an early close is not a bad connection).
+          continue;
+        }
+
+        // 8b (nnd.12): zero-first-byte hang. The readiness deadline fired — the
+        // upstream took the request and produced nothing for the whole window.
+        // Keep the "stream stall ≠ bad account" semantics (no
+        // markAccountUnavailable, no cooldown) but switch to a DIFFERENT
+        // connection once, transparently for the client. Quota-share combos
+        // rotate accounts in this same loop, so single-target combos benefit
+        // too. A second hang surfaces the retryable 504 below.
+        if (
+          shouldSwitchConnectionOnStreamReadinessTimeout(
+            result.errorType,
+            result.errorCode,
+            streamReadinessSwitchRetries,
+            hasForcedConnection
+          )
+        ) {
+          streamReadinessSwitchRetries += 1;
+          log.warn(
+            "STREAM",
+            `${provider}/${model} produced no stream content before the readiness deadline — switching connection once (attempt ${streamReadinessSwitchRetries})`
+          );
+          excludedConnectionIds.add(credentials.connectionId);
+          lastError = result.error || "stream readiness timeout";
+          lastStatus = result.status;
+          requestRetryLastError = lastError;
+          requestRetryLastStatus = lastStatus;
           continue;
         }
 

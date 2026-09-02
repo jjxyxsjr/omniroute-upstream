@@ -411,7 +411,8 @@ function createErrorResponse(
   message: string,
   code: string,
   type: string,
-  upstreamDiagnostic?: string
+  upstreamDiagnostic?: string,
+  extraHeaders?: Record<string, string>
 ): Response {
   return new Response(
     JSON.stringify(
@@ -422,7 +423,7 @@ function createErrorResponse(
         { code, type }
       )
     ),
-    { status, headers: { "Content-Type": "application/json" } }
+    { status, headers: { "Content-Type": "application/json", ...extraHeaders } }
   );
 }
 
@@ -534,7 +535,12 @@ export async function ensureStreamReadiness(
             HTTP_STATUS.GATEWAY_TIMEOUT,
             reason,
             "STREAM_READINESS_TIMEOUT",
-            "stream_timeout"
+            "stream_timeout",
+            undefined,
+            // 8b: a short Retry-After marks the 504 as retryable for clients
+            // (the body's code/type already identify it; the header makes it
+            // legible to standard retry tooling).
+            { "Retry-After": "1" }
           ),
         };
       }
@@ -559,7 +565,12 @@ export async function ensureStreamReadiness(
             HTTP_STATUS.GATEWAY_TIMEOUT,
             reason,
             "STREAM_READINESS_TIMEOUT",
-            "stream_timeout"
+            "stream_timeout",
+            undefined,
+            // 8b: a short Retry-After marks the 504 as retryable for clients
+            // (the body's code/type already identify it; the header makes it
+            // legible to standard retry tooling).
+            { "Retry-After": "1" }
           ),
         };
       }

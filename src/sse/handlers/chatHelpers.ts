@@ -779,6 +779,29 @@ export function shouldRetryStreamEarlyEof(
   return errorCode === "STREAM_EARLY_EOF" && attempt < STREAM_EARLY_EOF_MAX_RETRIES;
 }
 
+/**
+ * 8b (nnd.12): decide whether a stream-readiness timeout (upstream accepted the
+ * request, then produced nothing for the whole window — the "zero first byte"
+ * hang) should trigger ONE transparent connection switch on the single-model
+ * path. The switch is exclusion-only: the caller must NOT mark the account
+ * unavailable (a stream stall is an upstream issue, not a bad account) — it
+ * only adds the connection to excludedConnectionIds so account rotation picks
+ * the next one. Bounded to exactly one switch per request so a fully hanging
+ * upstream cannot multiply the wait; a forced connection cannot switch away.
+ */
+export const STREAM_READINESS_SWITCH_MAX_RETRIES = 1;
+
+export function shouldSwitchConnectionOnStreamReadinessTimeout(
+  errorType: string | null | undefined,
+  errorCode: string | null | undefined,
+  attempt: number,
+  hasForcedConnection: boolean
+): boolean {
+  if (hasForcedConnection) return false;
+  if (attempt >= STREAM_READINESS_SWITCH_MAX_RETRIES) return false;
+  return errorType === "stream_timeout" || errorCode === "STREAM_READINESS_TIMEOUT";
+}
+
 export function decideProxyResolutionFailure(
   err: unknown,
   env: { PROXY_FAIL_OPEN?: string } = process.env
