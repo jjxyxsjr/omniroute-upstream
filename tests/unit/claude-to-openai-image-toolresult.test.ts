@@ -255,3 +255,90 @@ test("string content tool_result is unchanged", () => {
   assert.ok(toolMsg, "expected a tool message");
   assert.equal(toolMsg.content, "Simple string result");
 });
+
+// ---------------------------------------------------------------------------
+// 2c 前置缺口 (nnd.12 丢图收尾): URL-sourced nested images used to be silently
+// dropped — the base64 branch (7b139fdb5e) lifted only source.type==="base64",
+// while a tool_result image with source.type==="url" fell through to the
+// JSON.stringify fallback and the model never saw the image.
+// ---------------------------------------------------------------------------
+test("URL-sourced nested tool_result image is lifted to image_url in the following user turn", () => {
+  const result = claudeToOpenAIRequest(
+    "gpt-4o",
+    {
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "tool-url", name: "fetch_screenshot", input: {} }],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-url",
+              content: [
+                { type: "text", text: "screenshot captured" },
+                {
+                  type: "image",
+                  source: { type: "url", url: "https://example.com/screenshot.png" },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    false
+  );
+
+  const msgs = result.messages as any[];
+  const toolMsg = msgs.find((m) => m.role === "tool");
+  assert.ok(toolMsg, "expected a tool message");
+  assert.equal(toolMsg.content, "screenshot captured", "text stays in the tool message");
+
+  const followUp = msgs[msgs.length - 1];
+  assert.equal(followUp.role, "user");
+  const imgPart = (followUp.content as any[]).find((p) => p.type === "image_url");
+  assert.ok(imgPart, "the URL image must be lifted, not dropped");
+  assert.equal(imgPart.image_url.url, "https://example.com/screenshot.png");
+  assert.doesNotMatch(
+    JSON.stringify(toolMsg.content),
+    /example\.com/,
+    "no lazy stringify fallback for URL images"
+  );
+});
+
+test("image-only URL tool_result gets the placeholder text (no stringify blob)", () => {
+  const result = claudeToOpenAIRequest(
+    "gpt-4o",
+    {
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "tool-url2", name: "snap", input: {} }],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-url2",
+              content: [
+                { type: "image", source: { type: "url", url: "https://example.com/only.png" } },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    false
+  );
+
+  const msgs = result.messages as any[];
+  const toolMsg = msgs.find((m) => m.role === "tool");
+  assert.equal(toolMsg.content, "[tool returned an image; see attached]");
+  const followUp = msgs[msgs.length - 1];
+  const imgPart = (followUp.content as any[]).find((p) => p.type === "image_url");
+  assert.ok(imgPart, "image-only URL tool_result must still lift the image");
+});

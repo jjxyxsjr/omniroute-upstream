@@ -464,6 +464,16 @@ function convertClaudeMessage(msg, preserveCacheControl = false) {
                   },
                 });
                 hasImage = true;
+              } else if (
+                c.type === "image" &&
+                c.source?.type === "url" &&
+                typeof c.source.url === "string"
+              ) {
+                // 丢图收尾 (nnd.12): URL-sourced nested images used to fall
+                // through to the JSON.stringify fallback — the model never saw
+                // the image. Mirror the top-level URL handling (see above).
+                parts.push({ type: "image_url", image_url: { url: c.source.url } });
+                hasImage = true;
               }
             }
             resultContent =

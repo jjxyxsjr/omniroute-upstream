@@ -337,9 +337,15 @@ test("Claude -> OpenAI converts tool_result blocks into tool messages and preser
     tool_call_id: "tu_1",
     content: "20C",
   });
+  // nnd.12 丢图收尾: URL-sourced nested tool_result images are now lifted into
+  // the following user turn (same as base64 since 7b139fdb5e) instead of being
+  // silently dropped — the trailing user text shares the lifted message.
   assert.deepEqual(result.messages[2], {
     role: "user",
-    content: "Thanks",
+    content: [
+      { type: "image_url", image_url: { url: "https://example.com/ignored.png" } },
+      { type: "text", text: "Thanks" },
+    ],
   });
 });
 
