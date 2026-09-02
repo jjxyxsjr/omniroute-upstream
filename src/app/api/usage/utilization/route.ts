@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getAggregatedSnapshots } from "@/lib/db/quotaSnapshots";
 import { getProviderConnectionById } from "@/lib/db/providers";
 import type {
@@ -38,6 +39,11 @@ function getRangeStartIso(range: UtilizationTimeRange): string {
 
 export async function GET(request: Request) {
   try {
+    // 015': provider/connection-level usage with account emails is management
+    // data — gate it like the rest of the dashboard surface.
+    const authError = await requireManagementAuth(request);
+    if (authError) return authError;
+
     const { searchParams } = new URL(request.url);
     const rangeParam = searchParams.get("range");
     const providerParam = searchParams.get("provider");

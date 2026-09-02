@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getProviderCallStats, getModelCallStats } from "@/lib/db/providerStats";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    // 015': provider/model call stats + combo telemetry is management data.
+    const authError = await requireManagementAuth(request);
+    if (authError) return authError;
+
     // Hard Rule #5: SQL lives in src/lib/db/providerStats.ts, not inline here.
     const providerStats = getProviderCallStats();
     const modelStats = getModelCallStats();

@@ -338,3 +338,24 @@ test("memory health endpoint requires management authentication", () => {
   assert.ok(content.includes("const authError = await requireManagementAuth(request);"));
   assert.ok(content.includes("if (authError) return authError;"));
 });
+
+// 015' (nnd.12): utilization and provider-stats expose provider/connection-level
+// usage snapshots INCLUDING account emails — they sat on the management API
+// surface with no authentication at all (provider-stats' GET didn't even take
+// a request parameter).
+test("015' utilization and provider-stats routes require management authentication", () => {
+  const routePaths = [
+    "src/app/api/usage/utilization/route.ts",
+    "src/app/api/provider-stats/route.ts",
+  ];
+
+  for (const routePath of routePaths) {
+    const content = fs.readFileSync(routePath, "utf8");
+    assert.ok(content.includes('from "@/lib/api/requireManagementAuth"'), routePath);
+    assert.ok(
+      content.includes("const authError = await requireManagementAuth(request);"),
+      routePath
+    );
+    assert.ok(content.includes("if (authError) return authError;"), routePath);
+  }
+});
