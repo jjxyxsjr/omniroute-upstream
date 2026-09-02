@@ -7,6 +7,10 @@ import { normalizeReasoningRequest } from "@/shared/reasoning/effortStandardizat
 import { isDetailedLoggingEnabled } from "@/lib/db/detailedLogs";
 import { resolvePreviousResponseState } from "@/lib/db/responsesContinuationStore";
 import { normalizeResponsesPreviousResponseIdMode } from "@omniroute/open-sse/utils/responsesStatePolicy.ts";
+import {
+  normalizeVisionImagesInBody,
+  resolveVisionImageNormalization,
+} from "@omniroute/open-sse/utils/visionImageNormalization.ts";
 import { FORMATS } from "@omniroute/open-sse/translator/formats.ts";
 import { resolveRoutingModel, RoutingModelOps } from "./resolveRoutingModel";
 import {
@@ -766,6 +770,19 @@ async function handleChatImplementation(
   const modelBeforeGuardrails =
     typeof body?.model === "string" && body.model.length > 0 ? body.model : modelStr;
   body = preCallGuardrails.payload;
+  // 2c (nnd.12): normalize inline vision images (RGB, ≤4096 long edge, ~4MP,
+  // baseline JPEG/PNG) before any dispatch — every combo target and retry sees
+  // the same normalized bytes. Fail-open; OMNIROUTE_IMAGE_NORMALIZATION=0 off.
+  if (resolveVisionImageNormalization(process.env)) {
+    const visionNorm = await normalizeVisionImagesInBody(body);
+    if (visionNorm.normalized > 0) {
+      log.info(
+        "VISION",
+        `Normalized ${visionNorm.normalized} inline image(s) for upstream vision pipeline (2c)`,
+        { skipped: visionNorm.skipped }
+      );
+    }
+  }
   ({ body, modelStr } = await RoutingModelOps.reconcileGuardrailReroute({
     body,
     modelBeforeGuardrails,
