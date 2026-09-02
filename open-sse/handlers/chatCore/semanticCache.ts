@@ -78,6 +78,7 @@ export async function checkSemanticCache({
       const cachedSse = stream ? synthesizeOpenAiSseFromJson(JSON.stringify(cached)) : "";
       const headers: Record<string, string> = {
         "Content-Type": cachedSse ? "text/event-stream" : "application/json",
+        ...(cachedSse ? { "X-Accel-Buffering": "no" } : {}),
         [OMNIROUTE_RESPONSE_HEADERS.cache]: "HIT",
         // Marker for latency measurement tools: this response served from cache
         // has synthetic (near-zero) latency, not real upstream latency.

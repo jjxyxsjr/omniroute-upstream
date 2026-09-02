@@ -179,6 +179,9 @@ export function protectMcpSseResponse(request: Request, response: Response): Res
   if (!/(?:^|,)\s*no-transform(?:\s*(?:,|$))/i.test(cacheControl ?? "")) {
     headers.set("cache-control", [cacheControl, "no-transform"].filter(Boolean).join(", "));
   }
+  // SSE through a buffering reverse proxy breaks the streamable-HTTP session
+  // cadence the same way it breaks chat SSE (2g-c).
+  headers.set("x-accel-buffering", "no");
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

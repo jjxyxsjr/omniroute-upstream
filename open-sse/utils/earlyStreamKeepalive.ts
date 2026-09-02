@@ -365,6 +365,9 @@ export async function withEarlyStreamKeepalive(
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
+      // Reverse proxies buffer SSE by default; this is exactly the
+      // slow-start path where buffering hurts the most (2g-c).
+      "X-Accel-Buffering": "no",
       ...extraHeaders,
     },
   });
