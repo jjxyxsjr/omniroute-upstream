@@ -8,9 +8,11 @@
  * cache keyed by completion time absorbs that loop.
  *
  * Two deliberate semantics:
- *   - The window does NOT slide on a hit. The observed tab cadence is exactly
- *     300s; a fixed TTL refreshed on access would resonate with it and lapse
- *     every cycle. Re-hits keep the original completion timestamp.
+ *   - The window does NOT slide on a hit, and expiry is STRICTLY greater-than
+ *     (elapsed == window still hits). The observed tab cadence is exactly 300s;
+ *     nnd.11's ">=" check with a 300s window let every cadence probe land
+ *     exactly on the boundary and expire — full resonance, zero debounce.
+ *     The 360s default (> cadence) plus strict ">" closes both failure modes.
  *   - Failed results age out at half the window so genuine breakage is
  *     re-probed sooner than success is.
  *
@@ -59,7 +61,7 @@ export function createConnectionTestDebounce(
       const entry = cache.get(connectionId);
       if (!entry) return undefined;
       const effectiveMs = entry.failed ? windowMs / 2 : windowMs;
-      if (now() - entry.completedAt >= effectiveMs) {
+      if (now() - entry.completedAt > effectiveMs) {
         cache.delete(connectionId);
         return undefined;
       }
@@ -71,7 +73,7 @@ export function createConnectionTestDebounce(
   };
 }
 
-const CONNECTION_TEST_DEBOUNCE_DEFAULT_MS = 300_000;
+const CONNECTION_TEST_DEBOUNCE_DEFAULT_MS = 360_000;
 
 /** Resolve the debounce window from OMNIROUTE_TEST_DEBOUNCE_MS (0 = off). */
 export function resolveConnectionTestDebounceMs(env: NodeJS.ProcessEnv): number {
