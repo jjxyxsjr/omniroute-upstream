@@ -1415,7 +1415,13 @@ async function handleComboChatInner({
           perTargetAdmission &&
           !(await perTargetAdmission({ modelStr, executionKey: target.executionKey, body }))
         ) {
-          log.info("COMBO", `Skipping ${modelStr} — admission lane full (#9654)`);
+          log.warn("COMBO", `Skipping ${modelStr} — admission lane full (#9654)`, {
+            combo,
+            model: modelStr,
+            executionKey: target.executionKey,
+            reason: "admission_lane",
+            code: "chat_admission_busy",
+          });
           recordComboDecision(traceInvocationId, {
             step: target.executionKey,
             target: modelStr,
@@ -3232,7 +3238,13 @@ async function handleRoundRobinCombo({
         perTargetAdmission &&
         !(await perTargetAdmission({ modelStr, executionKey: target.executionKey, body }))
       ) {
-        log.info("COMBO-RR", `Skipping ${modelStr} — admission lane full (#9654)`);
+        log.warn("COMBO-RR", `Skipping ${modelStr} — admission lane full (#9654)`, {
+          combo,
+          model: modelStr,
+          executionKey: target.executionKey,
+          reason: "admission_lane",
+          code: "chat_admission_busy",
+        });
         if (offset > 0) fallbackCount++;
         continue;
       }
