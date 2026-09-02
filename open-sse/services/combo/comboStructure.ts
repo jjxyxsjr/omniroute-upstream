@@ -523,7 +523,7 @@ export type MediaGuardrailViolation = {
 
 /** OMNIROUTE_MAX_IMAGES_PER_REQUEST: per-request inline image cap. 0 = off. */
 export function resolveMaxImagesPerRequest(
-  env: Pick<NodeJS.ProcessEnv, "OMNIROUTE_MAX_IMAGES_PER_REQUEST"> = process.env
+  env: { OMNIROUTE_MAX_IMAGES_PER_REQUEST?: string | undefined } = process.env
 ): number {
   const raw = env.OMNIROUTE_MAX_IMAGES_PER_REQUEST;
   if (raw === undefined || raw === "") return DEFAULT_MAX_IMAGES_PER_REQUEST;

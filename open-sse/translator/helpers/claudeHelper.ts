@@ -25,7 +25,7 @@ const CLAUDE_FORMAT_PROVIDERS_WITHOUT_OUTPUT_CONFIG = new Set<string>(["minimax"
  * fall back to plain-thinking conversion (reasoningCache text or placeholder).
  */
 export function resolveProvidersWithoutRedactedThinking(
-  env: Pick<NodeJS.ProcessEnv, "OMNIROUTE_NO_REDACTED_THINKING_PROVIDERS"> = process.env
+  env: { OMNIROUTE_NO_REDACTED_THINKING_PROVIDERS?: string | undefined } = process.env
 ): Set<string> {
   const raw = env.OMNIROUTE_NO_REDACTED_THINKING_PROVIDERS;
   if (!raw) return new Set();

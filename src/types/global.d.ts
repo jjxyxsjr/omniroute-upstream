@@ -27,6 +27,12 @@ declare namespace NodeJS {
     OMNIROUTE_BASE_URL?: string;
     OMNIROUTE_DISABLE_BACKGROUND_SERVICES?: string;
     OMNIROUTE_PORT?: string;
+    // nnd.11 (missed at registration — broke typecheck:core): media guardrails
+    OMNIROUTE_MAX_IMAGES_PER_REQUEST?: string;
+    // nnd.11 (missed at registration): redacted_thinking provider allowlist
+    OMNIROUTE_NO_REDACTED_THINKING_PROVIDERS?: string;
+    // nnd.12 (2c): inline vision image normalization switch
+    OMNIROUTE_IMAGE_NORMALIZATION?: string;
     PRICING_SYNC_ENABLED?: string;
     NODE_ENV?: "development" | "production" | "test";
   }
