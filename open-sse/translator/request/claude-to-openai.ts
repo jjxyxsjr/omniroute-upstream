@@ -1,6 +1,7 @@
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
 import { adjustMaxTokens } from "../helpers/maxTokensHelper.ts";
+import { capMaxOutputTokens } from "../../../src/lib/modelCapabilities.ts";
 
 type JsonRecord = Record<string, unknown>;
 const TOOL_CHOICE_ANY = ["a", "n", "y"].join("");
@@ -113,7 +114,12 @@ export function claudeToOpenAIRequest(model, body, stream, credentials: unknown 
 
   // Max tokens
   if (body.max_tokens) {
-    result.max_tokens = adjustMaxTokens(body);
+    const adjusted = adjustMaxTokens(body);
+    // 011 (nnd.12): clamp to the model's registered output cap (same shape as
+    // the Gemini/Kiro translators) instead of letting an oversized request
+    // hard-drop the only target as a capability mismatch. Unknown cap => pass
+    // through unchanged.
+    result.max_tokens = capMaxOutputTokens(model, adjusted) ?? adjusted;
   }
 
   // Temperature

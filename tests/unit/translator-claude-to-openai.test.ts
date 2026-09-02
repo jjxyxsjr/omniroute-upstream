@@ -17,7 +17,7 @@ test("Claude -> OpenAI maps system blocks, parameters, tool declarations and too
         { name: "   ", description: "skip", input_schema: { type: "object" } },
       ],
       tool_choice: { type: "tool", name: "weather" },
-      max_tokens: 40000,
+      max_tokens: 1000,
       temperature: 0.4,
       top_p: 0.7,
       stop_sequences: ["DONE"],
@@ -27,7 +27,10 @@ test("Claude -> OpenAI maps system blocks, parameters, tool declarations and too
 
   assert.equal(result.model, "gpt-4o");
   assert.equal(result.stream, true);
-  assert.equal(result.max_tokens, 40000);
+  // adjustMaxTokens lifts tool-carrying requests to the 16384 agentic floor,
+  // which coincides with gpt-4o's registered output cap — either force lands
+  // on 16384. Clamping semantics live in max-tokens-clamp-nnd12.test.ts.
+  assert.equal(result.max_tokens, 16384);
   assert.equal(result.temperature, 0.4);
   assert.equal(result.top_p, 0.7);
   assert.deepEqual(result.stop, ["DONE"]);
