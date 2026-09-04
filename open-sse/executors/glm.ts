@@ -18,6 +18,7 @@ import {
   GLM_COUNT_TOKENS_TIMEOUT_MS,
   type GlmTransport,
   getGlmTransport,
+  isGlmClaudePassthrough,
 } from "../config/glmProvider.ts";
 import { applyProviderRequestDefaults } from "../services/providerRequestDefaults.ts";
 import { stripUnsupportedParams } from "../translator/paramSupport.ts";
@@ -354,6 +355,24 @@ export class GlmExecutor extends DefaultExecutor {
       return transformed;
     }
 
+    // Claude passthrough (psd.targetFormat="claude"): chatCore already handed us a
+    // claude-shaped body for the Anthropic door — translating openai→claude here would
+    // be a lossy double roundtrip. Only the Zhipu-required thinking normalization applies.
+    if (isGlmClaudePassthrough(credentials.providerSpecificData)) {
+      if (record) {
+        const existingThinking = asRecord(record.thinking);
+        if (
+          existingThinking &&
+          existingThinking.type !== "enabled" &&
+          existingThinking.type !== "disabled"
+        ) {
+          record.thinking = { ...existingThinking, type: "enabled" };
+        }
+        if (effortTier) record.effort = effortTier.effort;
+      }
+      return transformed;
+    }
+
     const translated = translateRequest(
       FORMATS.OPENAI,
       FORMATS.CLAUDE,
@@ -510,6 +529,18 @@ export class GlmExecutor extends DefaultExecutor {
         null,
       clientResponseFormat: input.clientResponseFormat ?? null,
     });
+
+    // Claude passthrough: the response is already in the format chatCore expects —
+    // translating claude→openai here would force a lossy reverse roundtrip downstream.
+    if (isGlmClaudePassthrough(input.credentials?.providerSpecificData)) {
+      return {
+        response: rawResponse,
+        url,
+        headers,
+        transformedBody,
+        targetFormat: FORMATS.CLAUDE,
+      };
+    }
 
     const translatedResponse =
       input.stream && rawResponse.ok

@@ -1,5 +1,10 @@
 import type { RegistryEntry } from "../../../shared.ts";
-import { GLM_REQUEST_DEFAULTS, GLM_TIMEOUT_MS, GLM_SHARED_MODELS } from "../../../shared.ts";
+import {
+  GLM_REQUEST_DEFAULTS,
+  GLM_TIMEOUT_MS,
+  GLM_SHARED_MODELS,
+  getAnthropicCompatHeaders,
+} from "../../../shared.ts";
 
 export const glm_cnProvider: RegistryEntry = {
   id: "glm-cn",
@@ -9,6 +14,15 @@ export const glm_cnProvider: RegistryEntry = {
   baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
   authType: "apikey",
   authHeader: "bearer",
+  alternateFormats: [
+    {
+      format: "claude",
+      baseUrl: "https://open.bigmodel.cn/api/anthropic/v1/messages",
+      authHeader: "x-api-key",
+      headers: getAnthropicCompatHeaders(),
+      label: "Anthropic-compatible (Claude Code door)",
+    },
+  ],
   defaultContextLength: 200000,
   requestDefaults: GLM_REQUEST_DEFAULTS,
   timeoutMs: GLM_TIMEOUT_MS,
