@@ -459,6 +459,17 @@ export function getGlmAnthropicBaseUrl(
   return GLM_ANTHROPIC_DEFAULT_BASE_URLS[getGlmApiRegion(providerSpecificData)];
 }
 
+/**
+ * True when the connection opts into the Anthropic-door passthrough (psd.targetFormat="claude",
+ * valid because glm-cn declares the claude alternate format in its registry entry). In this mode
+ * chatCore keeps claude bodies untranslated and the executor must skip both the openai→claude
+ * request translation and the claude→openai response translation.
+ */
+export function isGlmClaudePassthrough(providerSpecificData: unknown): boolean {
+  const targetFormat = asString(asRecord(providerSpecificData)?.targetFormat);
+  return !!targetFormat && targetFormat.toLowerCase() === "claude";
+}
+
 export function getGlmPrimaryTransport(
   providerSpecificData: unknown,
   fallbackBaseUrl?: string | null
@@ -467,6 +478,7 @@ export function getGlmPrimaryTransport(
   const configuredTransport = asString(data.primaryTransport);
   if (configuredTransport === "anthropic") return "anthropic";
   if (configuredTransport === "openai") return "openai";
+  if (isGlmClaudePassthrough(providerSpecificData)) return "anthropic";
   return isAnthropicGlmBaseUrl(getGlmBaseUrl(providerSpecificData, fallbackBaseUrl))
     ? "anthropic"
     : "openai";
