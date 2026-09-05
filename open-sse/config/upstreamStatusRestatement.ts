@@ -83,9 +83,28 @@ const AGENTROUTER_RULES: UpstreamStatusRestatementRule[] = [
   },
 ];
 
+/**
+ * nnd.16 — glm-cn 1210 "图片输入格式/解析错误" (image input format/parse error).
+ * Deterministic client-content error: retrying the SAME image can never succeed,
+ * yet agent loops retried it 100+ times in 25 minutes (2026-09-06 storm, URL
+ * passed as image_url). Keep 400 (it IS a client error) but stamp a ruleId and a
+ * long Retry-After so callers/agents can distinguish "fix your input" from
+ * "try again later". 1210 is a Zhipu error-code literal.
+ */
+const GLM_CN_RULES: UpstreamStatusRestatementRule[] = [
+  {
+    id: "glm-cn-1210-image-unparseable",
+    fromStatuses: new Set([400]),
+    toStatus: 400,
+    textMarkers: ["1210", "图片输入格式", "图片解析错误"],
+    defaultRetryAfterMs: 3600_000, // deterministic — an hour beats a retry storm
+  },
+];
+
 /** Provider id (lowercase) → ordered rules; first match wins. */
 export const statusRestatementRegistry = new Map<string, UpstreamStatusRestatementRule[]>([
   ["agentrouter", AGENTROUTER_RULES],
+  ["glm-cn", GLM_CN_RULES],
 ]);
 
 function stringifyBody(body: unknown): string {

@@ -482,7 +482,14 @@ export function getGlmPrimaryTransport(
   const configuredTransport = asString(data.primaryTransport);
   if (configuredTransport === "anthropic") return "anthropic";
   if (configuredTransport === "openai") return "openai";
-  if (isGlmClaudePassthrough(providerSpecificData)) return "anthropic";
+  // nnd.16: psd.targetFormat alone NO LONGER infers anthropic transport — it drove
+  // a two-layer split (chatCore format=openai via customModels, executor=anthropic
+  // via psd) that got healthy 4.6v responses killed as 502 (2026-09-06 incident,
+  // 94 rows). Passthrough is now decided IN THE EXECUTOR by body shape
+  // (looksClaudeShaped, nnd.14) so both layers can never disagree. Operators
+  // wanting full claude-wire set customModels targetFormat=claude (drives chatCore)
+  // AND send claude bodies; the psd flag alone is inert for transport.
+  // (isGlmClaudePassthrough stays exported: executor + finalize still use it.)
   return isAnthropicGlmBaseUrl(getGlmBaseUrl(providerSpecificData, fallbackBaseUrl))
     ? "anthropic"
     : "openai";

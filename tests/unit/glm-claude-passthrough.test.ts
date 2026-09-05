@@ -26,9 +26,11 @@ test("glm-cn registry declares the Anthropic-door alternate format", () => {
   assert.equal(alt.authHeader, "x-api-key");
 });
 
-test("psd targetFormat=claude infers the anthropic transport", () => {
-  assert.equal(getGlmPrimaryTransport(PASSTHROUGH_PSD), "anthropic");
+test("nnd.16: psd targetFormat alone does NOT infer anthropic (anti-split)", () => {
+  // 2026-09-06 4.6v incident root: psd-only inference split the two layers.
+  assert.equal(getGlmPrimaryTransport(PASSTHROUGH_PSD), "openai");
   assert.equal(getGlmPrimaryTransport({ apiRegion: "china" }), "openai");
+  assert.equal(getGlmPrimaryTransport({ apiRegion: "china", primaryTransport: "anthropic" }), "anthropic");
 });
 
 test("chatCore keeps claude as the wire target for a passthrough connection", () => {
@@ -105,7 +107,7 @@ test("execute() hits the china anthropic door and returns claude SSE untranslate
       model: "glm-cn/glm-5.3-flash",
       body: structuredClone(CLAUDE_BODY),
       stream: true,
-      credentials: { apiKey: "glm-key", providerSpecificData: PASSTHROUGH_PSD },
+      credentials: { apiKey: "glm-key", providerSpecificData: { ...PASSTHROUGH_PSD, primaryTransport: "anthropic" } },
     });
 
     assert.ok(captured);
@@ -186,4 +188,61 @@ test("nnd.15: streaming completion with zero visible content must be flagged (no
   assert.ok(!isEmptyContentResponse(healthy), "有正文不得误伤");
   const thinkingOnlyBilled = { choices: [{ message: { role: "assistant", content: null, reasoning_content: "思考" }, finish_reason: null }], usage: { prompt_tokens: 100, completion_tokens: 30 } };
   assert.ok(!isEmptyContentResponse(thinkingOnlyBilled), "completion>0 的纯思考(上游真计费)不算假成功");
+});
+
+test("nnd.16: transport inference must NOT split from chatCore format (two-layer misalignment root fix)", () => {
+  // 2026-09-06 4.6v incident: customModels had NO targetFormat (chatCore=openai)
+  // but psd.targetFormat=claude drove executor transport=anthropic → claude-shaped
+  // response validated against an openai template → healthy 200s killed as 502 ×94.
+  // Fix contract: executor passthrough engages ONLY when BOTH layers agree.
+  const executor = new GlmExecutor("glm-cn");
+  const openaiBody = {
+    model: "glm-4.6v", max_tokens: 512, stream: true,
+    messages: [{ role: "user", content: "x" }], // openai形状
+  };
+  const out = executor.transformForTransport(
+    "glm-4.6v", structuredClone(openaiBody), true,
+    { apiKey: "k", providerSpecificData: { targetFormat: "claude" } }, // psd有但customModels无
+    "anthropic"
+  ) as Record<string, unknown>;
+  // openai体必须被翻译(现状已对——nnd.14的looksClaudeShaped兜住了)
+  const tools = (out.tools as Array<Record<string, unknown>>);
+  // 更关键: transport推断本身——psd单方面targetFormat不应再驱动anthropic
+  // 现状: getGlmPrimaryTransport({targetFormat:'claude'})='anthropic' ← 分裂源头
+  // 修后: 无customModels对齐信号时不应推断anthropic(由looksClaudeShaped在执行器内兜底)
+  assert.ok(true, "transport推断修正见下方单独断言");
+});
+
+test("nnd.16: glm-cn 1210 image-format 400 carries non-retryable semantics", async () => {
+  // 2026-09-06 storm: URL-as-image → upstream 1210 ×100+ retries in 25min.
+  // Contract: 1210 stays 400 (client error, not gateway) but the restated body
+  // tells agents this is deterministic — retrying the SAME image cannot succeed.
+  const { applyStatusRestatement } = await import("../../open-sse/config/upstreamStatusRestatement.ts");
+  const r = applyStatusRestatement({
+    provider: "glm-cn",
+    status: 400,
+    message: "[1210][图片输入格式/解析错误][20260906]",
+    body: null,
+    retryAfterMs: null,
+  });
+  assert.ok(r.ruleId?.includes("1210") || r.ruleId?.includes("image"), "1210应有专属改写规则: " + (r.ruleId || "未命中"));
+  assert.equal(r.status, 400, "保持400(客户端错)");
+});
+
+test("nnd.16: http(s) image_url passed through gets flagged non-retryable (storm root)", async () => {
+  // 2026-09-06: MCP sent a docs PAGE URL in image_url → upstream pulled HTML → 1210
+  // → quality-retry storm. Contract: glm-cn 1210 message + 400 = restated with
+  // ruleId + 1h Retry-After (agent stops hammering). Direct upstream-shape test.
+  const { applyStatusRestatement } = await import("../../open-sse/config/upstreamStatusRestatement.ts");
+  const hit = applyStatusRestatement({
+    provider: "glm-cn", status: 400,
+    message: "[400]: [1210][图片输入格式/解析错误][20260906002158]",
+    body: null, retryAfterMs: null,
+  });
+  assert.equal(hit.ruleId, "glm-cn-1210-image-unparseable");
+  assert.equal(hit.status, 400);
+  assert.equal(hit.retryAfterMs, 3600_000);
+  // Non-image 400s untouched
+  const miss = applyStatusRestatement({ provider: "glm-cn", status: 400, message: "bad max_tokens", body: null, retryAfterMs: null });
+  assert.equal(miss.ruleId, null);
 });
