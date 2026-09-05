@@ -570,7 +570,12 @@ export function createErrorResult(
     errorCode,
     response: new Response(JSON.stringify(body), {
       status: statusCode,
-      headers: { "Content-Type": "application/json" },
+      headers: retryAfterMs
+        ? {
+            "Content-Type": "application/json",
+            "Retry-After": String(Math.ceil(retryAfterMs / 1000)),
+          }
+        : { "Content-Type": "application/json" },
     }),
   };
 

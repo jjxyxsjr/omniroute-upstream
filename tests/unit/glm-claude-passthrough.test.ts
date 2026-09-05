@@ -244,3 +244,11 @@ test("nnd.16: http(s) image_url passed through gets flagged non-retryable (storm
   const miss = applyStatusRestatement({ provider: "glm-cn", status: 400, message: "bad max_tokens", body: null, retryAfterMs: null });
   assert.equal(miss.ruleId, null);
 });
+
+test("nnd.16: createErrorResult stamps Retry-After header when retryAfterMs set", async () => {
+  const { createErrorResult } = await import("../../open-sse/utils/error.ts");
+  const r = createErrorResult(400, "[1210] x", 3600_000);
+  assert.equal(r.response.headers.get("retry-after"), "3600");
+  const none = createErrorResult(400, "plain");
+  assert.equal(none.response.headers.get("retry-after"), null);
+});
