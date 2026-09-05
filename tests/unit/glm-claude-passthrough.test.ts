@@ -26,11 +26,9 @@ test("glm-cn registry declares the Anthropic-door alternate format", () => {
   assert.equal(alt.authHeader, "x-api-key");
 });
 
-test("nnd.16: psd targetFormat alone does NOT infer anthropic (anti-split)", () => {
-  // 2026-09-06 4.6v incident root: psd-only inference split the two layers.
-  assert.equal(getGlmPrimaryTransport(PASSTHROUGH_PSD), "openai");
+test("nnd.16 v2: psd targetFormat infers anthropic (operator signal, half-open warned)", () => {
+  assert.equal(getGlmPrimaryTransport(PASSTHROUGH_PSD), "anthropic");
   assert.equal(getGlmPrimaryTransport({ apiRegion: "china" }), "openai");
-  assert.equal(getGlmPrimaryTransport({ apiRegion: "china", primaryTransport: "anthropic" }), "anthropic");
 });
 
 test("chatCore keeps claude as the wire target for a passthrough connection", () => {

@@ -482,14 +482,19 @@ export function getGlmPrimaryTransport(
   const configuredTransport = asString(data.primaryTransport);
   if (configuredTransport === "anthropic") return "anthropic";
   if (configuredTransport === "openai") return "openai";
-  // nnd.16: psd.targetFormat alone NO LONGER infers anthropic transport — it drove
-  // a two-layer split (chatCore format=openai via customModels, executor=anthropic
-  // via psd) that got healthy 4.6v responses killed as 502 (2026-09-06 incident,
-  // 94 rows). Passthrough is now decided IN THE EXECUTOR by body shape
-  // (looksClaudeShaped, nnd.14) so both layers can never disagree. Operators
-  // wanting full claude-wire set customModels targetFormat=claude (drives chatCore)
-  // AND send claude bodies; the psd flag alone is inert for transport.
-  // (isGlmClaudePassthrough stays exported: executor + finalize still use it.)
+  // nnd.16 v2: psd.targetFormat DOES infer anthropic (it is the operator's
+  // per-connection "use the Claude door" signal). The 2026-09-06 4.6v incident
+  // was a HALF-OPEN state (psd set, customModels missing) whose symptom is
+  // quality-validation shape mismatch — the durable fix is the executor's body-shape
+  // guard (looksClaudeShaped, nnd.14) plus a warn log here exposing the half-open
+  // state so operators catch it. Removing the inference entirely broke full-claude
+  // operators (claude bodies hit the coding door → 400 type illegal, sidecar proof).
+  if (isGlmClaudePassthrough(providerSpecificData)) {
+    console.warn(
+      "[glm] connection targetFormat=claude driving anthropic transport — ensure customModels targetFormat=claude is also set for this model (half-open state caused the 2026-09-06 4.6v 502 storm)"
+    );
+    return "anthropic";
+  }
   return isAnthropicGlmBaseUrl(getGlmBaseUrl(providerSpecificData, fallbackBaseUrl))
     ? "anthropic"
     : "openai";
