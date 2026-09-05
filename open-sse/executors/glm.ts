@@ -135,6 +135,25 @@ function hasTools(body: unknown): boolean {
   return Array.isArray(record?.tools) && record.tools.length > 0;
 }
 
+/**
+ * True when the request body is already Anthropic/Claude-shaped (safe for the
+ * passthrough fast path). OpenAI-shaped bodies — tools wrapped as
+ * `{type:"function",function:{...}}`, string/parallel system — must take the
+ * openai→claude translation instead (2026-09-05 422 incident).
+ */
+function looksClaudeShaped(record: Record<string, unknown> | null | undefined): boolean {
+  if (!record) return false;
+  const tools = record.tools;
+  if (Array.isArray(tools) && tools.length > 0) {
+    const first = tools[0] as Record<string, unknown>;
+    // Claude tools carry a top-level name + input_schema; openai wraps in .function.
+    if ("function" in first || !("name" in first)) return false;
+  }
+  const system = record.system;
+  if (typeof system === "string") return false; // openai string system
+  return true;
+}
+
 function isRetryableGlmFallbackStatus(status: number): boolean {
   return status === 404 || status === 408 || status === 409 || status === 429 || status >= 500;
 }
@@ -355,10 +374,14 @@ export class GlmExecutor extends DefaultExecutor {
       return transformed;
     }
 
-    // Claude passthrough (psd.targetFormat="claude"): chatCore already handed us a
-    // claude-shaped body for the Anthropic door — translating openai→claude here would
-    // be a lossy double roundtrip. Only the Zhipu-required thinking normalization applies.
-    if (isGlmClaudePassthrough(credentials.providerSpecificData)) {
+    // Claude passthrough (psd.targetFormat="claude"): a claude-shaped body (chatCore already
+    // resolved targetFormat=claude for direct requests) goes to the Anthropic door untouched —
+    // translating openai→claude here would be a lossy double roundtrip. But combo leaves and
+    // other paths can still hand us an OPENAI-shaped body (the executor is the translation
+    // point for those) — passing those through raw sends openai tools to the Anthropic door
+    // and upstream 422s (2026-09-05 incident: tools[0].name missing). Shape-detect instead
+    // of trusting the flag alone.
+    if (isGlmClaudePassthrough(credentials.providerSpecificData) && looksClaudeShaped(record)) {
       if (record) {
         const existingThinking = asRecord(record.thinking);
         if (

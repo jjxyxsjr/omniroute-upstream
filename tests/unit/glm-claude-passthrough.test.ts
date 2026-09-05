@@ -122,3 +122,21 @@ test("execute() hits the china anthropic door and returns claude SSE untranslate
     globalThis.fetch = originalFetch;
   }
 });
+
+test("passthrough mode must still translate OPENAI-shaped bodies (422 incident)", () => {
+  const executor = new GlmExecutor("glm-cn");
+  // 2026-09-05 422 事故原始形态: openai 客户体, tools 为 function 形状
+  const openaiBody = {
+    model: "glm-5.3-flash", max_tokens: 2048, stream: true,
+    tools: [{ type: "function", function: { name: "Task", description: "launch agent", parameters: { type: "object", properties: { cmd: { type: "string" } } } } }],
+    messages: [{ role: "user", content: "run it" }],
+  };
+  const out = executor.transformForTransport(
+    "glm-5.3-flash", structuredClone(openaiBody), true,
+    { apiKey: "k", providerSpecificData: PASSTHROUGH_PSD }, "anthropic"
+  ) as Record<string, unknown>;
+  const t0 = (out.tools as Array<Record<string, unknown>>)[0];
+  assert.equal(t0.name, "Task", "openai function 工具必须译出顶层 name");
+  assert.ok(t0.input_schema, "openai parameters 必须译成 input_schema");
+  assert.ok(!t0.function, "不得残留 openai function 包装");
+});
