@@ -46,6 +46,22 @@ export function isEmptyContentResponse(responseBody: unknown): boolean {
       typeof firstChoice.finish_reason === "string" ? firstChoice.finish_reason : "";
     if (LEGIT_EMPTY_OPENAI_FINISH.has(finishReason)) return false;
 
+    // nnd.15: thinking-burnout shape — a reasoning model spent the whole budget on
+    // reasoning_content, delivered zero visible text AND zero billed output tokens
+    // (completion_tokens === 0). Having reasoning prose is NOT user-visible content;
+    // flag it so streaming call-logs stop recording fake 200s (2026-09-05 ladder:
+    // 7/971 requests, content=null + reasoning + completion_tokens=0).
+    const usage = body.usage as Record<string, unknown> | undefined;
+    const completionTokens = Number(usage?.completion_tokens ?? NaN);
+    if (
+      !hasContent &&
+      !hasToolCalls &&
+      Number.isFinite(completionTokens) &&
+      completionTokens === 0
+    ) {
+      return true;
+    }
+
     return !hasContent && !hasReasoning && !hasToolCalls;
   }
 

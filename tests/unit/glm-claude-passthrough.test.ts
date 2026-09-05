@@ -171,3 +171,19 @@ test("nnd.14: TTFT-timeout fails fast — no fallback-transport retry", async ()
   }
   assert.equal(calls, 1, "非流式死线触发后不得再走备门重试(快速失败)");
 });
+
+test("nnd.15: streaming completion with zero visible content must be flagged (no fake 200)", async () => {
+  const { isEmptyContentResponse } = await import("../../open-sse/services/errorClassifier.ts");
+  // 13:23:00 假成功实测形态: choices[0].message.content=null + reasoning_content 有 + completion_tokens=0
+  const fakeSuccessBody = {
+    choices: [{ message: { role: "assistant", content: null, reasoning_content: "The user is asking..." }, finish_reason: null }],
+    usage: { prompt_tokens: 202521, completion_tokens: 0, total_tokens: 202521 },
+    _streamed: true,
+  };
+  assert.ok(isEmptyContentResponse(fakeSuccessBody), "思考烧尽形态(content空+completion=0)必须判空");
+  // 有真实输出的不得误伤
+  const healthy = { choices: [{ message: { role: "assistant", content: "答案", reasoning_content: "思考" }, finish_reason: "stop" }], usage: { prompt_tokens: 100, completion_tokens: 50 } };
+  assert.ok(!isEmptyContentResponse(healthy), "有正文不得误伤");
+  const thinkingOnlyBilled = { choices: [{ message: { role: "assistant", content: null, reasoning_content: "思考" }, finish_reason: null }], usage: { prompt_tokens: 100, completion_tokens: 30 } };
+  assert.ok(!isEmptyContentResponse(thinkingOnlyBilled), "completion>0 的纯思考(上游真计费)不算假成功");
+});

@@ -5479,7 +5479,7 @@ export async function handleChatCore({
     itlMs: streamItlMs,
     interrupted: streamInterrupted,
   }) => {
-    const normalizedStreamStatus = streamStatus || 200;
+    let normalizedStreamStatus = streamStatus || 200;
     if (streamCompletionRecorded) return;
     streamCompletionRecorded = true;
     if (normalizedStreamStatus !== 200) {
@@ -5505,6 +5505,21 @@ export async function handleChatCore({
         providerSpecificData: credentials?.providerSpecificData,
         log,
       });
+      // nnd.15: streaming fake-success guard — the non-streaming branch runs
+      // isEmptyContentResponse at chatCore.ts:4804, but streaming completions
+      // never did, so thinking-burnout responses (content=null, reasoning prose,
+      // completion_tokens=0) logged as 200 with zero user-visible output
+      // (2026-09-05 ladder: 7/971). The stream already reached the client — this
+      // cannot retry — but the call-log row is reclassified so audits, stats and
+      // the fake-success ledger see the truth instead of a fake 200.
+      if (streamResponseBody && isEmptyContentResponse(streamResponseBody)) {
+        log?.warn?.(
+          "STREAM_EMPTY_CONTENT",
+          `${provider}/${model} stream completed with zero visible content (completion_tokens=0) — reclassifying as empty_content`
+        );
+        persistFailureUsage(HTTP_STATUS.BAD_GATEWAY, "empty_content");
+        normalizedStreamStatus = HTTP_STATUS.BAD_GATEWAY;
+      }
     }
 
     // Reasoning Replay Cache (#1628): Capture reasoning_content from streaming responses
