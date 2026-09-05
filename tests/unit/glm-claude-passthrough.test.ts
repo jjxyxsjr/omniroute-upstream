@@ -140,3 +140,34 @@ test("passthrough mode must still translate OPENAI-shaped bodies (422 incident)"
   assert.ok(t0.input_schema, "openai parameters 必须译成 input_schema");
   assert.ok(!t0.function, "不得残留 openai function 包装");
 });
+
+test("nnd.14: TTFT-timeout fails fast — no fallback-transport retry", async () => {
+  const executor = new GlmExecutor("glm-cn");
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  process.env.OMNIROUTE_DIRECT_HEADERS_TIMEOUT_MS = "300";
+  globalThis.fetch = ((input: unknown, init?: RequestInit) => {
+    calls++;
+    return new Promise<Response>((_, rej) => {
+      const sig = init?.signal;
+      if (sig && sig.aborted) return rej(sig.reason as Error);
+      sig?.addEventListener("abort", () => rej((sig as AbortSignal).reason as Error), { once: true });
+    });
+  }) as typeof fetch;
+  try {
+    await executor.execute({
+      model: "glm-cn/glm-5.3-flash",
+      body: { model: "glm-cn/glm-5.3-flash", max_tokens: 512, stream: false, messages: [{ role: "user", content: "x" }] },
+      stream: false,
+      credentials: { apiKey: "k", providerSpecificData: { apiRegion: "china" } },
+    });
+    assert.fail("应抛死线错误");
+  } catch (e: unknown) {
+    const msg = (e as Error).message || "";
+    assert.ok(/did not start within/.test(msg), "死线错误语义: " + msg.slice(0, 60));
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.OMNIROUTE_DIRECT_HEADERS_TIMEOUT_MS;
+  }
+  assert.equal(calls, 1, "非流式死线触发后不得再走备门重试(快速失败)");
+});

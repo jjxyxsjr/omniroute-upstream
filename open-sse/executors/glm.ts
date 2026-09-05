@@ -20,6 +20,11 @@ import {
   getGlmTransport,
   isGlmClaudePassthrough,
 } from "../config/glmProvider.ts";
+import {
+  directFetchWithBoundedResponseStart,
+  isDirectResponseStartTimeout,
+  resolveDirectHeadersTimeoutMs,
+} from "../utils/directResponseStartTimeout.ts";
 import { applyProviderRequestDefaults } from "../services/providerRequestDefaults.ts";
 import { stripUnsupportedParams } from "../translator/paramSupport.ts";
 import { getRotatingApiKey } from "../services/apiKeyRotator.ts";
@@ -162,6 +167,9 @@ function isRetryableGlmFallbackError(error: unknown): boolean {
   if (!error) return false;
   const err = error instanceof Error ? error : new Error(String(error));
   if (err.name === "AbortError") return false;
+  // nnd.14 完成优先: 首字节死线超时不再换门/换号重试——重试只会重做长生成并放大上游负载
+  // (2026-09-03 风暴: 45s×4 轮重试 = 3-6 分钟用户死寂)。快速失败交给客户端决策。
+  if (isDirectResponseStartTimeout(error)) return false;
   return true;
 }
 
@@ -490,12 +498,23 @@ export class GlmExecutor extends DefaultExecutor {
     let response: Response;
     try {
       this.assertOutboundUrlAllowed(url); // GHSA-4f49: glm has its own fetch path
-      response = await fetch(url, {
+      const fetchOpts = {
         method: "POST",
         headers,
         body: JSON.stringify(transformedBody),
         signal: combinedSignal || undefined,
-      });
+      };
+      // nnd.14: non-streaming requests previously had NO response-start bound (301s
+      // client-timeout hangs, 2026-09-03 storm's 17 rows). Streaming keeps its existing
+      // readiness/deadline machinery — only the non-stream fetch gets the direct bound.
+      response = input.stream
+        ? await fetch(url, fetchOpts)
+        : await directFetchWithBoundedResponseStart(
+            url,
+            fetchOpts as RequestInit,
+            fetch,
+            resolveDirectHeadersTimeoutMs()
+          );
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
     }
