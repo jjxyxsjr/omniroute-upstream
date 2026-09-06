@@ -347,7 +347,7 @@
     "keytar": "^7.9.0",
     "onnxruntime-node": "1.24.3",
     "sqlite-vec": "^0.1.9",
-    "tls-client-node": "^0.2.0",
+    "tls-client-node": "0.2.0",
     "wreq-js": "^3.0.0"
   },
   "devDependencies": {
