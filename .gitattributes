@@ -9,3 +9,6 @@
 # This file must stay LF too: git parses it as-is, and a trailing CR would
 # corrupt every pattern (e.g. "*.sh\r" matches nothing).
 .gitattributes text eol=lf
+
+# AGENTS.md is ours (nnd fork rules); keep our version on upstream merges
+AGENTS.md merge=ours
