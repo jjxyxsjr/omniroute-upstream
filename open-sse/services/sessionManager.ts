@@ -41,8 +41,15 @@ const sessions = new Map<string, SessionEntry>();
 // Hard cap on active sessions to prevent memory exhaustion
 const MAX_SESSIONS = 200;
 
-// Auto-cleanup sessions older than 15 minutes (reduced from 30)
-const SESSION_TTL_MS = 15 * 60 * 1000;
+// Auto-cleanup sessions — was 15 min (reduced from 30 at some point), but
+// coding-agent turns space 20-40 min apart; expiring the session tracking
+// mid-task lost continuity signals downstream (stickiness, turn tracking).
+// nnd.17: aligned with stickiness TTL — 60 min default, env-tunable.
+const SESSION_TTL_MS = (() => {
+  const raw = process.env.OMNIROUTE_SESSION_TTL_MIN;
+  const parsed = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed * 60 * 1000 : 60 * 60 * 1000;
+})();
 const _cleanupTimer = setInterval(() => {
   const now = Date.now();
   // Evict expired sessions

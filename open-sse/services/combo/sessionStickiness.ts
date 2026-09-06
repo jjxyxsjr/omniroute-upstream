@@ -65,8 +65,20 @@ import type { ResolvedComboTarget } from "./types.ts";
  */
 export const STICKINESS_HEADROOM_THRESHOLD = 0.15;
 
-/** TTL aligned with sessionManager.ts SESSION_TTL_MS (15 min). */
-const TTL_MS = 15 * 60 * 1000;
+/**
+ * Sticky-binding TTL. Was 15 min (aligned with sessionManager) — but coding-agent
+ * turns regularly space 20-40 min apart (thinking, tool execution, user reading
+ * the diff). Every expiry forced the next turn onto a cold-prefix account
+ * (7% of big-session requests cold, avg TTFT 4.6s vs 3.2s cached — 2026-09-06
+ * production data). Now env-tunable, default 60 min, still bounded by
+ * MAX_ENTRIES LRU + the headroom/terminal/quota gates so a long-lived pin can
+ * never hold a dead connection.
+ */
+const TTL_MS = (() => {
+  const raw = process.env.OMNIROUTE_STICKINESS_TTL_MIN;
+  const parsed = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed * 60 * 1000 : 60 * 60 * 1000;
+})();
 
 /** Cap to prevent unbounded memory growth. */
 const MAX_ENTRIES = 500;
