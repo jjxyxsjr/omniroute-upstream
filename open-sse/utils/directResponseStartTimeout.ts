@@ -13,7 +13,13 @@ export function resolveDirectHeadersTimeoutMs(
   const raw = env.OMNIROUTE_DIRECT_HEADERS_TIMEOUT_MS;
   if (raw == null || raw.trim() === "") return DEFAULT_DIRECT_HEADERS_TIMEOUT_MS;
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+  if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
+  // nnd.18: invalid values fall back to the default, NOT 0 (which silently disabled
+  // the bound — a typo like "30000s" would restore the pre-nnd.14 unbounded hang).
+  console.warn(
+    `[directResponseStartTimeout] OMNIROUTE_DIRECT_HEADERS_TIMEOUT_MS="${raw}" is invalid — falling back to ${DEFAULT_DIRECT_HEADERS_TIMEOUT_MS}ms (set a positive integer or unset to use default)`
+  );
+  return DEFAULT_DIRECT_HEADERS_TIMEOUT_MS;
 }
 
 function createDirectResponseStartTimeout(timeoutMs: number): Error & { code: string } {

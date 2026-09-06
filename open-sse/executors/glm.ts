@@ -150,9 +150,11 @@ function looksClaudeShaped(record: Record<string, unknown> | null | undefined): 
   if (!record) return false;
   const tools = record.tools;
   if (Array.isArray(tools) && tools.length > 0) {
-    const first = tools[0] as Record<string, unknown>;
+    const first = tools[0];
+    if (!first || typeof first !== "object") return false;
+    const firstRec = first as Record<string, unknown>;
     // Claude tools carry a top-level name + input_schema; openai wraps in .function.
-    if ("function" in first || !("name" in first)) return false;
+    if ("function" in firstRec || !("name" in firstRec)) return false;
   }
   const system = record.system;
   if (typeof system === "string") return false; // openai string system

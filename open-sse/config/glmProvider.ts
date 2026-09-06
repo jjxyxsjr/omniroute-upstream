@@ -474,6 +474,9 @@ export function isGlmClaudePassthrough(providerSpecificData: unknown): boolean {
   return !!targetFormat && targetFormat.toLowerCase() === "claude";
 }
 
+/** Half-open warn dedup — one warn per connection+format, not per call. */
+const halfOpenWarned = new Set<string>();
+
 export function getGlmPrimaryTransport(
   providerSpecificData: unknown,
   fallbackBaseUrl?: string | null
@@ -490,9 +493,13 @@ export function getGlmPrimaryTransport(
   // state so operators catch it. Removing the inference entirely broke full-claude
   // operators (claude bodies hit the coding door → 400 type illegal, sidecar proof).
   if (isGlmClaudePassthrough(providerSpecificData)) {
-    console.warn(
-      "[glm] connection targetFormat=claude driving anthropic transport — ensure customModels targetFormat=claude is also set for this model (half-open state caused the 2026-09-06 4.6v 502 storm)"
-    );
+    const dedupKey = String(asRecord(providerSpecificData)?.connectionId ?? "unknown");
+    if (!halfOpenWarned.has(dedupKey)) {
+      halfOpenWarned.add(dedupKey);
+      console.warn(
+        `[glm] connection ${dedupKey} targetFormat=claude driving anthropic transport — ensure customModels targetFormat=claude is also set (half-open state caused the 2026-09-06 4.6v 502 storm)`
+      );
+    }
     return "anthropic";
   }
   return isAnthropicGlmBaseUrl(getGlmBaseUrl(providerSpecificData, fallbackBaseUrl))

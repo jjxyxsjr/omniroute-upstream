@@ -414,8 +414,14 @@ export function openaiToClaudeRequest(model, body, stream, credentials = null) {
         // `type: "function"` entirely. Previously that bare shape fell
         // through to `toolData = tool` (the wrapper itself, with no `.name`),
         // producing an empty `originalName` and silently dropping the tool.
+        // nnd.18 audit fix: guard against null/primitive tool entries — the upstream
+        // Zod route schema is intentionally .passthrough() so `tools: [null]` reaches
+        // here and `tool.function` would throw on null.
+        if (!tool || typeof tool !== "object") {
+          return null;
+        }
         const toolData = tool.function ?? tool;
-        const originalName = typeof toolData.name === "string" ? toolData.name.trim() : "";
+        const originalName = typeof toolData?.name === "string" ? toolData.name.trim() : "";
 
         if (!originalName) {
           return null;

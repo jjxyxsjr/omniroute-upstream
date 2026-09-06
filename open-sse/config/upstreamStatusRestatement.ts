@@ -96,7 +96,7 @@ const GLM_CN_RULES: UpstreamStatusRestatementRule[] = [
     id: "glm-cn-1210-image-unparseable",
     fromStatuses: new Set([400]),
     toStatus: 400,
-    textMarkers: ["1210", "图片输入格式", "图片解析错误"],
+    textMarkers: ['"code":"1210"', '"error_code":1210', "图片输入格式", "图片解析错误"],
     defaultRetryAfterMs: 3600_000, // deterministic — an hour beats a retry storm
   },
 ];

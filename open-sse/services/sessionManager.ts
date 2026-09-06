@@ -5,6 +5,7 @@
  * prompt caching, and per-session tracking.
  */
 
+import { resolveTtlMinutesFromEnv } from "../utils/ttlFromEnv.ts";
 import { createHash } from "node:crypto";
 
 interface SessionEntry {
@@ -45,11 +46,7 @@ const MAX_SESSIONS = 200;
 // coding-agent turns space 20-40 min apart; expiring the session tracking
 // mid-task lost continuity signals downstream (stickiness, turn tracking).
 // nnd.17: aligned with stickiness TTL — 60 min default, env-tunable.
-const SESSION_TTL_MS = (() => {
-  const raw = process.env.OMNIROUTE_SESSION_TTL_MIN;
-  const parsed = raw ? parseInt(raw, 10) : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed * 60 * 1000 : 60 * 60 * 1000;
-})();
+const SESSION_TTL_MS = resolveTtlMinutesFromEnv("OMNIROUTE_SESSION_TTL_MIN", 60);
 const _cleanupTimer = setInterval(() => {
   const now = Date.now();
   // Evict expired sessions

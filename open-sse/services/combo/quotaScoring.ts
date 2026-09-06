@@ -327,9 +327,12 @@ export function scoreResetAwareQuota(
   //   0.65 → inside the band against HEALTHY accounts (sessionWeight=1 scores
   //          ~0.9+), i.e. a standing ~1/(N+1) rotation share that grows as GLM
   //          depletes (per-connection max_concurrent stays the hard fuse).
-  const noQuotaFloor = finiteNumberOrNull(
+  const rawFloor = finiteNumberOrNull(
     Number(process.env.OMNIROUTE_RESET_AWARE_NO_QUOTA_FLOOR)
   );
+  // nnd.18: clamp to [0,1] — a typo like 2 or -1 would either outrank every real
+  // score (reviving the original Ark-pinning bug) or make the connection unselectable.
+  const noQuotaFloor = rawFloor != null ? Math.min(1, Math.max(0, rawFloor)) : null;
   if (!quota || !isRecord(quota)) return { score: noQuotaFloor ?? 0.35 };
   if (quota.limitReached === true) return { score: -Infinity };
 

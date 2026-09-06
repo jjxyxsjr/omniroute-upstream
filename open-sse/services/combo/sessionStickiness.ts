@@ -53,6 +53,7 @@
 
 import { createHash } from "node:crypto";
 import { computeHeadroom, type HeadroomSaturation } from "./headroomRanking.ts";
+import { resolveTtlMinutesFromEnv } from "../../utils/ttlFromEnv.ts";
 import type { ResolvedComboTarget } from "./types.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -74,11 +75,7 @@ export const STICKINESS_HEADROOM_THRESHOLD = 0.15;
  * MAX_ENTRIES LRU + the headroom/terminal/quota gates so a long-lived pin can
  * never hold a dead connection.
  */
-const TTL_MS = (() => {
-  const raw = process.env.OMNIROUTE_STICKINESS_TTL_MIN;
-  const parsed = raw ? parseInt(raw, 10) : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed * 60 * 1000 : 60 * 60 * 1000;
-})();
+const TTL_MS = resolveTtlMinutesFromEnv("OMNIROUTE_STICKINESS_TTL_MIN", 60);
 
 /** Cap to prevent unbounded memory growth. */
 const MAX_ENTRIES = 500;
