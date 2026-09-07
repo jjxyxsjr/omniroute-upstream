@@ -1701,6 +1701,27 @@ export function createSSEStream(options: StreamOptions = {}) {
                       parsed.delta.thinking
                     );
                   }
+                  // nnd.19: tool_use blocks must mark the aggregated call-log body
+                  // as a tool-call turn. A pure tool round (thinking + tool_use,
+                  // no visible text) otherwise aggregates to content=null with
+                  // finish_reason "stop" and the empty-content guard reclassifies
+                  // the finished stream as 502 (2026-09-07 glm-5.3 storm: ZCode
+                  // agent turns, completion_tokens=786, 89 user-visible 502s).
+                  if (parsed.type === "content_block_start") {
+                    const block = parsed.content_block;
+                    if (
+                      block &&
+                      typeof block === "object" &&
+                      (block as JsonRecord).type === "tool_use"
+                    ) {
+                      passthroughHasToolCalls = true;
+                    }
+                  } else if (
+                    parsed.type === "content_block_delta" &&
+                    parsed.delta?.type === "input_json_delta"
+                  ) {
+                    passthroughHasToolCalls = true;
+                  }
                   if (restoredToolName || thinkingSignatureInjected) {
                     output = `data: ${JSON.stringify(parsed)}\n\n`;
                     injectedUsage = true;

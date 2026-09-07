@@ -62,6 +62,13 @@ export function isEmptyContentResponse(responseBody: unknown): boolean {
       return true;
     }
 
+    // nnd.19: billed output tokens mean the upstream DID generate content. An
+    // aggregation that lost every collected field (claude passthrough tool-only
+    // rounds before tool_use accumulation existed) must not be classified as a
+    // fake-success empty response — the 2026-09-07 glm-5.3 storm reclassified
+    // finished streams with completion_tokens=786 into 89 user-visible 502s.
+    if (Number.isFinite(completionTokens) && completionTokens > 0) return false;
+
     return !hasContent && !hasReasoning && !hasToolCalls;
   }
 
@@ -71,7 +78,13 @@ export function isEmptyContentResponse(responseBody: unknown): boolean {
     // to emit a tool_use block) is a legitimate terminal state, not a silent
     // failure. Only flag empty content when no such terminal stop_reason is present.
     const stopReason = typeof body.stop_reason === "string" ? body.stop_reason : "";
-    return !LEGIT_EMPTY_CLAUDE_STOP.has(stopReason);
+    if (LEGIT_EMPTY_CLAUDE_STOP.has(stopReason)) return false;
+    // nnd.19 (claude-shape twin of the choices guard above): billed
+    // output_tokens = real generation, whatever the aggregation lost.
+    const claudeUsage = body.usage as Record<string, unknown> | undefined;
+    const outputTokens = Number(claudeUsage?.output_tokens ?? NaN);
+    if (Number.isFinite(outputTokens) && outputTokens > 0) return false;
+    return true;
   }
 
   if (typeof body.text === "string") {

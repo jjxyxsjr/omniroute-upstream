@@ -1691,7 +1691,16 @@ async function handleComboChatInner({
               if (i > 0) fallbackCount++;
               if (provider && rawModel) {
                 const mlSettings = resolveModelLockoutSettings(settings);
-                if (mlSettings.enabled && mlSettings.errorCodes.includes(502)) {
+                // nnd.19: quality 502s are our own stream judgement (empty-content
+                // reclassification, no-recognized-content peek), not an upstream
+                // HTTP status — locking on them fanned one soft failure out into
+                // minutes of ALL_TARGETS_SKIPPED (2026-09-07 glm-5.3 storm).
+                // Opt back in per-connection-free via settings.modelLockout.qualityFailureLockout.
+                if (
+                  mlSettings.enabled &&
+                  mlSettings.qualityFailureLockout &&
+                  mlSettings.errorCodes.includes(502)
+                ) {
                   recordModelLockoutFailure(
                     provider,
                     target.connectionId || "",

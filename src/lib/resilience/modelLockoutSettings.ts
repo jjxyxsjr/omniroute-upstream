@@ -7,6 +7,15 @@ export interface ModelLockoutSettings {
   maxCooldownMs: number;
   maxBackoffSteps: number;
   useExponentialBackoff: boolean;
+  /**
+   * nnd.19: lock the model on QUALITY-validation 502s (empty-content
+   * reclassification, streaming no-recognized-content, …). Defaults to
+   * false — a quality 502 is our own judgement on a stream that often
+   * completed at the HTTP layer, and locking on it turned the 2026-09-07
+   * glm-5.3 soft failures into minutes of ALL_TARGETS_SKIPPED fan-out.
+   * Real upstream HTTP status codes in `errorCodes` keep locking.
+   */
+  qualityFailureLockout: boolean;
 }
 
 export const DEFAULT_MODEL_LOCKOUT_SETTINGS: ModelLockoutSettings = {
@@ -16,6 +25,7 @@ export const DEFAULT_MODEL_LOCKOUT_SETTINGS: ModelLockoutSettings = {
   maxCooldownMs: 1_800_000,
   maxBackoffSteps: 10,
   useExponentialBackoff: true,
+  qualityFailureLockout: false,
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -89,6 +99,10 @@ export function resolveModelLockoutSettings(
     useExponentialBackoff: toBoolean(
       raw.useExponentialBackoff,
       DEFAULT_MODEL_LOCKOUT_SETTINGS.useExponentialBackoff
+    ),
+    qualityFailureLockout: toBoolean(
+      raw.qualityFailureLockout,
+      DEFAULT_MODEL_LOCKOUT_SETTINGS.qualityFailureLockout
     ),
   };
 }

@@ -5513,9 +5513,15 @@ export async function handleChatCore({
       // cannot retry — but the call-log row is reclassified so audits, stats and
       // the fake-success ledger see the truth instead of a fake 200.
       if (streamResponseBody && isEmptyContentResponse(streamResponseBody)) {
+        // nnd.19: report the ACTUAL billed token counts — the nnd.15 wording
+        // hardcoded "(completion_tokens=0)" and misled the 2026-09-07 storm
+        // diagnosis (real reclassifications carried completion_tokens=786).
+        const emptyUsage = (streamResponseBody as Record<string, unknown>).usage as
+          | Record<string, unknown>
+          | undefined;
         log?.warn?.(
           "STREAM_EMPTY_CONTENT",
-          `${provider}/${model} stream completed with zero visible content (completion_tokens=0) — reclassifying as empty_content`
+          `${provider}/${model} stream completed with zero visible content (usage=${JSON.stringify(emptyUsage ?? null)}) — reclassifying as empty_content`
         );
         persistFailureUsage(HTTP_STATUS.BAD_GATEWAY, "empty_content");
         normalizedStreamStatus = HTTP_STATUS.BAD_GATEWAY;
