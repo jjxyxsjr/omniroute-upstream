@@ -2033,7 +2033,10 @@ async function handleSingleModelChat(
             result.errorType,
             result.errorCode,
             streamReadinessSwitchRetries,
-            hasForcedConnection
+            hasForcedConnection,
+            // nnd.20: zero-byte hang terminates instead of switching — a silent
+            // upstream stays silent for the re-sent body too (9-08 OOM lesson).
+            (result as { anyByteAt?: number | null }).anyByteAt
           )
         ) {
           streamReadinessSwitchRetries += 1;

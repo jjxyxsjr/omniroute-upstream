@@ -795,10 +795,23 @@ export function shouldSwitchConnectionOnStreamReadinessTimeout(
   errorType: string | null | undefined,
   errorCode: string | null | undefined,
   attempt: number,
-  hasForcedConnection: boolean
+  hasForcedConnection: boolean,
+  /**
+   * nnd.20: arrival moment of the first raw upstream byte within the readiness
+   * window (pings included); null = zero bytes ever arrived. A zero-byte hang
+   * means the upstream went silent on THIS request — re-sending the same body
+   * to a sibling connection only multiplies load and latency (the 9-08 heap
+   * amplification), so it terminates here. A transport-alive-but-slow timeout
+   * (bytes arrived, content did not) keeps the one bounded switch.
+   */
+  anyByteAt?: number | null
 ): boolean {
   if (hasForcedConnection) return false;
   if (attempt >= STREAM_READINESS_SWITCH_MAX_RETRIES) return false;
+  // undefined = caller not wired to the signal yet (legacy paths) — keep the
+  // pre-nnd.20 behavior; only an explicit null (zero bytes, confirmed by the
+  // readiness gate) terminates.
+  if (anyByteAt === null) return false;
   return errorType === "stream_timeout" || errorCode === "STREAM_READINESS_TIMEOUT";
 }
 

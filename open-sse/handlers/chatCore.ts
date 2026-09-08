@@ -5424,6 +5424,9 @@ export async function handleChatCore({
       errorType: streamReadiness.type,
       errorCode: streamReadiness.code,
       response: failureResponse,
+      // nnd.20: zero-first-byte signal — null means the upstream produced not
+      // one byte during the whole readiness window (see streamReadiness.ts).
+      anyByteAt: streamReadiness.anyByteAt ?? null,
     };
   }
   providerResponse = streamReadiness.response;

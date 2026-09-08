@@ -153,3 +153,42 @@ test("8b the readiness-timeout 504 carries Retry-After so clients can treat it a
   assert.equal(body.error?.code, "STREAM_READINESS_TIMEOUT");
   assert.equal(body.error?.type, "stream_timeout");
 });
+
+test("nnd.20 zero-byte readiness hang terminates instead of switching connections", () => {
+  assert.equal(
+    shouldSwitchConnectionOnStreamReadinessTimeout(
+      "stream_timeout",
+      "STREAM_READINESS_TIMEOUT",
+      0,
+      false,
+      null
+    ),
+    false,
+    "zero bytes ever arrived — switching would re-send the same body to a silent upstream"
+  );
+  assert.equal(
+    shouldSwitchConnectionOnStreamReadinessTimeout(
+      "stream_timeout",
+      "STREAM_READINESS_TIMEOUT",
+      0,
+      false,
+      undefined
+    ),
+    true,
+    "signal absent (legacy callers) keeps pre-nnd.20 switch behavior"
+  );
+});
+
+test("nnd.20 transport-alive readiness timeout still switches once", () => {
+  assert.equal(
+    shouldSwitchConnectionOnStreamReadinessTimeout(
+      "stream_timeout",
+      "STREAM_READINESS_TIMEOUT",
+      0,
+      false,
+      Date.now() - 2000
+    ),
+    true,
+    "bytes arrived (pings count) — bounded switch stays"
+  );
+});
