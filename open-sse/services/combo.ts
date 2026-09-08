@@ -181,7 +181,7 @@ import {
   waitForCooldownAwareRetry,
 } from "../../src/sse/services/cooldownAwareRetry.ts";
 import { dispatchChaosFromCombo, type ChaosTuning } from "./autoCombo/chaosEngine.ts";
-import {
+import { clampDeadlineFailureBudget,
   TRANSIENT_FOR_SEMAPHORE,
   MAX_FALLBACK_WAIT_MS,
   MAX_GLOBAL_ATTEMPTS,
@@ -1000,6 +1000,12 @@ async function handleComboChatInner({
   // #11134: operator-configurable shared attempt budget (clamped to the hard
   // cap). Defaults to MAX_GLOBAL_ATTEMPTS when unset.
   const maxGlobalAttempts = clampGlobalAttempts(config.maxGlobalAttempts);
+
+  // nnd.20: readiness-deadline failure budget — see comboPredicates.
+  const maxDeadlineFailures = clampDeadlineFailureBudget(
+    process.env.OMNIROUTE_COMBO_MAX_DEADLINE_FAILURES
+  );
+  let deadlineFailures = 0;
 
   // Cooldown-aware retry (Variante A). Originally quota-share (qtSd/) only;
   // extended to "auto" combos too (#7360 — a 2-model "default" auto combo
@@ -2393,6 +2399,30 @@ async function handleComboChatInner({
             }
           })();
           recordedAttempts++;
+          // nnd.20: readiness-deadline failures carry a full dead window + a
+          // heavy re-dispatch each; cap them far below the global-attempts
+          // budget so a silent upstream cannot multiply latency and heap.
+          const errorRecord =
+            typeof errorBody?.error === "object" && errorBody.error !== null
+              ? (errorBody.error as { code?: string })
+              : null;
+          const deadlineFailure =
+            errorRecord?.code === "STREAM_READINESS_TIMEOUT" ||
+            errorText.includes("no non-ping SSE event");
+          if (deadlineFailure && ++deadlineFailures >= maxDeadlineFailures) {
+            log.warn(
+              "COMBO",
+              `Readiness-deadline failure budget (${maxDeadlineFailures}) exhausted — terminating combo instead of rotating further targets`
+            );
+            lastStatus = 504;
+            return {
+              ok: false,
+              response: errorResponse(
+                504,
+                `Readiness deadline failed on ${deadlineFailures} targets — terminating to avoid amplifying a stalled upstream; retry shortly`
+              ),
+            };
+          }
           lastError = errorText || String(result.status);
           comboErrors.push({
             model: modelStr,

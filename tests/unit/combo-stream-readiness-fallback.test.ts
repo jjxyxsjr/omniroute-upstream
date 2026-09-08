@@ -604,3 +604,50 @@ test("combo does not retry stream readiness timeouts on the same model", async (
   assert.equal(result.ok, true, "combo should succeed via fallback");
   assert.deepEqual(calls, ["glm/zombie", "openai/gpt-5.4-mini"]);
 });
+
+test("nnd.20 readiness-deadline failure budget terminates combo before exhausting all targets", async () => {
+  const calls: string[] = [];
+  const log = createLog();
+
+  const result = await handleComboChat({
+    body: {
+      stream: true,
+      messages: [{ role: "user", content: "hello" }],
+    },
+    combo: {
+      name: "deadline-budget-test",
+      strategy: "priority",
+      models: [
+        { model: "glm/zombie-1", weight: 0 },
+        { model: "openai/zombie-2", weight: 0 },
+        { model: "gemini/zombie-3", weight: 0 },
+        { model: "anthropic/zombie-4", weight: 0 },
+        { model: "deepseek/zombie-5", weight: 0 },
+      ],
+      config: { maxRetries: 0, retryDelayMs: 0 },
+    },
+    handleSingleModel: async (_body: any, modelStr: string) => {
+      calls.push(modelStr);
+      return applyStreamReadiness(zombieStreamResponse());
+    },
+    isModelAvailable: async () => true,
+    log,
+    settings: null,
+    allCombos: null,
+    relayOptions: null as any,
+  });
+
+  assert.ok(!result.ok, "combo should terminate on the deadline budget");
+  assert.equal(result.status, 504);
+  assert.equal(
+    calls.length,
+    3,
+    `deadline budget (3) must stop target rotation early — got ${calls.length} dispatches: ${calls.join(", ")}`
+  );
+  assert.ok(
+    log.entries.some(
+      (e) => e.level === "warn" && String(e.msg).includes("Readiness-deadline failure budget")
+    ),
+    "termination should be logged for observability"
+  );
+});

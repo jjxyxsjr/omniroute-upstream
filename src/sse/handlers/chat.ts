@@ -1619,6 +1619,13 @@ async function handleSingleModelChat(
   let initialPreselectedCredentials = runtimeOptions.preselectedCredentials;
 
   requestAttemptLoop: while (true) {
+    // nnd.20: the client connection is the only reason this chain exists — a
+    // disconnected client must stop account/connection rotation immediately
+    // instead of letting it finish against its own rhythm (9-08 heap lesson).
+    if (requestSignal?.aborted) {
+      log.info("CHAT", "Client disconnected — stopping request attempt loop");
+      return errorResponse(499, "Client disconnected");
+    }
     const excludedConnectionIds = new Set<string>();
     let lastError = requestRetryLastError;
     let lastStatus = requestRetryLastStatus;
