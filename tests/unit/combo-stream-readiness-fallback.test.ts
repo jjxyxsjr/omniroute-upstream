@@ -626,7 +626,7 @@ test("nnd.20 readiness-deadline failure budget terminates combo before exhaustin
       ],
       config: { maxRetries: 0, retryDelayMs: 0 },
     },
-    handleSingleModel: async (_body: any, modelStr: string) => {
+    handleSingleModel: async (_body: unknown, modelStr: string) => {
       calls.push(modelStr);
       return applyStreamReadiness(zombieStreamResponse());
     },
@@ -634,7 +634,7 @@ test("nnd.20 readiness-deadline failure budget terminates combo before exhaustin
     log,
     settings: null,
     allCombos: null,
-    relayOptions: null as any,
+    relayOptions: null as unknown,
   });
 
   assert.ok(!result.ok, "combo should terminate on the deadline budget");
