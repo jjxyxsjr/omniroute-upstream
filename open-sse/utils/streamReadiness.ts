@@ -28,6 +28,15 @@ export type StreamReadinessResult =
       upstreamDiagnostic?: string;
       code: string;
       type: string;
+      /**
+       * Arrival moment of the FIRST raw byte from upstream (any byte — ping
+       * comment lines count), null when the window closed without a single
+       * byte. Separates "transport produced nothing at all" (zero-first-byte
+       * hang — rotating a sibling target just re-sends the same heavy body to
+       * the same upstream, nnd.20) from "transport alive but no content yet"
+       * (slow first token — bounded sibling rotation is useful).
+       */
+      anyByteAt?: number | null;
     };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -531,6 +540,7 @@ export async function ensureStreamReadiness(
           classificationReason: reason,
           code: "STREAM_READINESS_TIMEOUT",
           type: "stream_timeout",
+          anyByteAt: lastChunkAt,
           response: createErrorResponse(
             HTTP_STATUS.GATEWAY_TIMEOUT,
             reason,
@@ -561,6 +571,7 @@ export async function ensureStreamReadiness(
           classificationReason: reason,
           code: "STREAM_READINESS_TIMEOUT",
           type: "stream_timeout",
+          anyByteAt: lastChunkAt,
           response: createErrorResponse(
             HTTP_STATUS.GATEWAY_TIMEOUT,
             reason,
@@ -602,6 +613,7 @@ export async function ensureStreamReadiness(
           ...(upstreamDiagnostic ? { upstreamDiagnostic } : {}),
           code: "STREAM_EARLY_EOF",
           type: "stream_early_eof",
+          anyByteAt: lastChunkAt,
           response: createErrorResponse(
             HTTP_STATUS.BAD_GATEWAY,
             classificationReason,
