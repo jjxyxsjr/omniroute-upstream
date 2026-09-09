@@ -251,6 +251,7 @@ export async function executeWithUpstreamStartTimeout<T>({
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let abortListener: (() => void) | null = null;
   let timeoutAbortListener: (() => void) | null = null;
+  let outerAbortListener: (() => void) | null = null;
 
   const abortCombined = (source: AbortSignal) => {
     if (combinedController.signal.aborted) return;
@@ -271,15 +272,27 @@ export async function executeWithUpstreamStartTimeout<T>({
     }, timeoutMs);
   });
 
+  // nnd.21 候B: the loser of the three-way race below must never surface as an
+  // unhandledRejection. Once the race settles via one promise, the others stay
+  // pending with live reject paths: a late outer-signal abort (request cleanup,
+  // client disconnect — observed live 2026-09-09 01:03:56Z with a propagated
+  // DIRECT_RESPONSE_START_TIMEOUT reason) fires abortPromise's listener, and the
+  // timeout timer can fire a tick after execute() settled. Both racers get a
+  // no-op catch sink after the race, and the abort listener is removed so the
+  // signal is no longer pinned after this call returns.
   const abortPromise = new Promise<never>((_, reject) => {
-    signal.addEventListener("abort", () => reject(createAbortError(signal)), { once: true });
+    outerAbortListener = () => reject(createAbortError(signal));
+    signal.addEventListener("abort", outerAbortListener, { once: true });
   });
+  timeoutPromise.catch(() => {});
+  abortPromise.catch(() => {});
 
   try {
     return await Promise.race([execute(combinedController.signal), timeoutPromise, abortPromise]);
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
     if (abortListener) signal.removeEventListener("abort", abortListener);
+    if (outerAbortListener) signal.removeEventListener("abort", outerAbortListener);
     if (timeoutAbortListener) {
       timeoutController.signal.removeEventListener("abort", timeoutAbortListener);
     }

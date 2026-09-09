@@ -1713,7 +1713,17 @@ export class BaseExecutor {
         // Distinguish timeout errors from other abort errors
         const err = error instanceof Error ? error : new Error(String(error));
         if (err.name === "TimeoutError") {
-          log?.warn?.("TIMEOUT", `Fetch timeout after ${this.getTimeoutMs()}ms on ${url}`);
+          // nnd.21 候B: log the REAL message. A propagated lower-layer bound
+          // (e.g. DIRECT_RESPONSE_START_TIMEOUT's 45s direct response-start
+          // window) is also name="TimeoutError" — the old fixed-format line
+          // misreported those as "Fetch timeout after <configured executor
+          // timeout>ms" (observed: a 45s kill logged as 900000ms, 2026-09-09).
+          // Genuine executor timeouts carry the same text as the old format
+          // via their own message, so nothing is lost.
+          log?.warn?.(
+            "TIMEOUT",
+            err.message || `Fetch timeout after ${this.getTimeoutMs()}ms on ${url}`
+          );
         }
         lastError = err;
         if (!skipUpstreamRetry && urlIndex + 1 < fallbackCount) {
