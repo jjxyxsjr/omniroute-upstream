@@ -145,7 +145,11 @@ import {
   COLORS,
   withBodyTimeout,
 } from "../utils/stream.ts";
-import { ensureStreamReadiness } from "../utils/streamReadiness.ts";
+import {
+  ANY_BYTE_AT_HEADER,
+  ensureStreamReadiness,
+  parseAnyByteAtHeader,
+} from "../utils/streamReadiness.ts";
 import { resolveSuppressThinkClose, THINKING_MARKER_HEADER } from "../utils/thinkCloseMarker.ts";
 import { resolveStreamReadinessTimeout } from "../utils/streamReadinessPolicy.ts";
 import { resolveAgentGoalPolicy } from "../utils/agentGoalPolicy.ts";
@@ -4072,6 +4076,18 @@ export async function handleChatCore({
       upstreamErrorType = details.errorType as string | undefined;
     }
 
+    // nnd.21 候C: a stream-readiness failure synthesized by an executor's INNER
+    // gate (glm.ts ensureStreamReadiness) reaches this branch as a plain 504 —
+    // its zero-first-byte signal only survives in the response header (see
+    // streamReadiness.ts ANY_BYTE_AT_HEADER). Thread it onto the failure result
+    // so the routing layer's switch gate (shouldSwitchConnectionOnStreamReadiness
+    // Timeout, nnd.20 #47) sees a DEFINED anyByteAt: null (zero bytes) terminates
+    // instead of switching; a timestamp keeps the one bounded switch. Absent
+    // header (real upstream 5xx) stays undefined = legacy behavior.
+    const readinessAnyByteAt = parseAnyByteAtHeader(
+      providerResponse.headers?.get?.(ANY_BYTE_AT_HEADER)
+    );
+
     // Gateways like agentrouter misstate temporary quota exhaustion as 403/400,
     // which downstream classification treats as AUTH_ERROR and clients like
     // Claude Code treat as permanent. Restate to 429 (+ synthetic Retry-After)
@@ -4661,17 +4677,29 @@ export async function handleChatCore({
       // (src/sse/handlers/chat.ts), which resolves credentials FOR the emergency
       // provider through account selection. The executor-level hop that used to
       // live here re-sent the FAILING provider's credentials to the emergency
-      // provider's endpoint (e.g. the OpenAI API key to integrate.api.nvidia.com)
+      // provider's endpoint (e.g., the OpenAI API key to integrate.api.nvidia.com)
       // — a cross-provider credential leak that also never succeeded upstream.
-      return createErrorResult(
-        statusCode,
-        errMsg,
-        retryAfterMs,
-        upstreamErrorCode,
-        upstreamErrorType,
-        upstreamErrorBody,
-        { passthrough: sourceFormat === FORMATS.CLAUDE }
-      );
+      return {
+        ...createErrorResult(
+          statusCode,
+          errMsg,
+          retryAfterMs,
+          upstreamErrorCode,
+          upstreamErrorType,
+          upstreamErrorBody,
+          { passthrough: sourceFormat === FORMATS.CLAUDE }
+        ),
+        // nnd.21 候C: executor inner-gate stream-readiness failures carry their
+        // zero-first-byte signal here (see providerFailure top) so the routing
+        // layer's switch gate sees a defined value. Other failures stay signal-free.
+        ...(readinessAnyByteAt !== undefined &&
+        (upstreamErrorType === "stream_timeout" ||
+          upstreamErrorCode === "STREAM_READINESS_TIMEOUT" ||
+          upstreamErrorType === "stream_early_eof" ||
+          upstreamErrorCode === "STREAM_EARLY_EOF")
+          ? { anyByteAt: readinessAnyByteAt }
+          : {}),
+      };
     }
     // ── End T5 ───────────────────────────────────────────────────────────────
   }

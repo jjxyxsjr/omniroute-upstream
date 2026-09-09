@@ -436,6 +436,33 @@ function createErrorResponse(
   );
 }
 
+/**
+ * nnd.21 候C: carrier for the zero-first-byte signal across the executor
+ * boundary. The glm executor's inner readiness gate fails inside the executor,
+ * so its anyByteAt cannot ride the chatCore result object the way the outer
+ * gate's does (chatCore.ts returns it directly) — the synthetic failure
+ * response flows through providerFailure's generic branch where only headers
+ * survive all three glm transport paths (passthrough returns the response raw;
+ * the anthropic JSON translation clones headers — but drops error.code from
+ * the body). "none" = zero bytes ever arrived; an epoch-ms value = transport
+ * alive (pings/bytes) but no content event.
+ */
+export const ANY_BYTE_AT_HEADER = "X-OmniRoute-Any-Byte-At";
+
+export function buildAnyByteAtHeader(anyByteAt: number | null): Record<string, string> {
+  return { [ANY_BYTE_AT_HEADER]: anyByteAt === null ? "none" : String(anyByteAt) };
+}
+
+export function parseAnyByteAtHeader(
+  header: string | null | undefined
+): number | null | undefined {
+  if (header == null || header === "") return undefined;
+  if (header === "none") return null;
+  const parsed = Number(header);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  return undefined;
+}
+
 function prependBufferedChunks(
   chunks: Uint8Array[],
   reader: ReadableStreamDefaultReader<Uint8Array>
@@ -550,7 +577,7 @@ export async function ensureStreamReadiness(
             // 8b: a short Retry-After marks the 504 as retryable for clients
             // (the body's code/type already identify it; the header makes it
             // legible to standard retry tooling).
-            { "Retry-After": "1" }
+            { "Retry-After": "1", ...buildAnyByteAtHeader(lastChunkAt) }
           ),
         };
       }
@@ -581,7 +608,7 @@ export async function ensureStreamReadiness(
             // 8b: a short Retry-After marks the 504 as retryable for clients
             // (the body's code/type already identify it; the header makes it
             // legible to standard retry tooling).
-            { "Retry-After": "1" }
+            { "Retry-After": "1", ...buildAnyByteAtHeader(lastChunkAt) }
           ),
         };
       }
@@ -619,7 +646,8 @@ export async function ensureStreamReadiness(
             classificationReason,
             "STREAM_EARLY_EOF",
             "stream_early_eof",
-            upstreamDiagnostic
+            upstreamDiagnostic,
+            buildAnyByteAtHeader(lastChunkAt)
           ),
         };
       }
