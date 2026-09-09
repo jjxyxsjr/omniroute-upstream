@@ -119,10 +119,16 @@ RUN test -f package-lock.json \
 # roulette — it cost the first nnd.6 build attempt on 2026-08-26 after the
 # 13:30 build-cache prune removed the layer that had cached past this step).
 # Seed bin/ with the exact .so proven in production (extracted from the
-# running nnd.5 image) BEFORE the explicit postinstall run: when the API
-# answers, postinstall sees the expected file already present and no-ops;
-# when it cannot answer, its warn-and-exit-0 path is covered by the seed and
-# the non-empty-bin guard below still passes. Refresh vendor/tls-client/ when
+# running nnd.5 image) BEFORE the explicit postinstall run. nnd.21: the seed
+# alone was NOT enough — postinstall's script calls the GitHub releases API
+# UNCONDITIONALLY (version metadata fetch happens before its exists() short-
+# circuit) with a timeout-less fetch, so a hung proxy/API connection stalls
+# the whole step indefinitely (2026-09-09: 15min+ zero progress; the "cannot
+# answer" path the seed was designed for was a fast reject, not a hang).
+# TLS_CLIENT_SKIP_DOWNLOAD=1 makes postinstall a true no-op; runtime resolution
+# (dist/binary.js ensureNativeLibrary→findExistingAsset) scans bin/ by platform
+# prefix and never calls the API when the seeded 1.15.1 .so is present, and the
+# non-empty-bin guard below still passes. Refresh vendor/tls-client/ when
 # bumping tls-client-node so the seeded version keeps matching.
 COPY vendor/tls-client/ /tmp/tls-client-vendor/
 RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
@@ -132,7 +138,7 @@ RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,targe
   && node -e "require('better-sqlite3')(':memory:').close()" \
   && mkdir -p node_modules/tls-client-node/bin \
   && cp /tmp/tls-client-vendor/tls-client-*.so node_modules/tls-client-node/bin/ \
-  && node node_modules/tls-client-node/scripts/postinstall.js \
+  && TLS_CLIENT_SKIP_DOWNLOAD=1 node node_modules/tls-client-node/scripts/postinstall.js \
   && (test -n "$(find node_modules/tls-client-node/bin -mindepth 1 -print -quit 2>/dev/null)" \
       || (echo "tls-client-node native binary missing after postinstall — GitHub API fetch likely rate-limited or failed (#7802)" >&2 && exit 1))
 
