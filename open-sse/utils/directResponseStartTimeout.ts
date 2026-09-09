@@ -22,6 +22,29 @@ export function resolveDirectHeadersTimeoutMs(
   return DEFAULT_DIRECT_HEADERS_TIMEOUT_MS;
 }
 
+/**
+ * nnd.21 候A: response-start window for the SECOND direct attempt (fresh
+ * no-keep-alive socket). The pooled attempt keeps the operator's
+ * OMNIROUTE_DIRECT_HEADERS_TIMEOUT_MS as a poisoning probe (a half-open pooled
+ * socket fails instantly on a fresh one), but ark-class anthropic-compatible
+ * upstreams withhold even HTTP headers through a cold prefill (~45-50s for a
+ * 66k body) — a flat second 45s kills a healthy slow upstream before the
+ * stream-readiness budget (60-120s adaptive) ever starts counting. Align the
+ * fresh-socket window with that budget's ceiling; worst case stays bounded at
+ * first + max. Never narrows below the pooled window, and a disabled bound
+ * (<=0) disables both segments.
+ */
+export function resolveFreshSocketResponseStartTimeoutMs(
+  pooledMs: number,
+  streamReadinessMaxTimeoutMs: number
+): number {
+  if (!(pooledMs > 0)) return pooledMs;
+  if (!Number.isFinite(streamReadinessMaxTimeoutMs)) return pooledMs;
+  const floor = Math.floor(streamReadinessMaxTimeoutMs);
+  if (!(floor > 0)) return pooledMs;
+  return Math.max(pooledMs, floor);
+}
+
 function createDirectResponseStartTimeout(timeoutMs: number): Error & { code: string } {
   const err = new Error(
     `Direct response did not start within ${timeoutMs}ms — retrying on a fresh socket`

@@ -23,7 +23,9 @@ import {
   directFetchWithBoundedResponseStart,
   isDirectResponseStartTimeout,
   resolveDirectHeadersTimeoutMs,
+  resolveFreshSocketResponseStartTimeoutMs,
 } from "./directResponseStartTimeout.ts";
+import { STREAM_READINESS_MAX_TIMEOUT_MS } from "../config/constants.ts";
 
 // #9100: relay egress (Vercel / Deno / Cloudflare edge functions) used to go
 // through bare `originalFetch` — NO connection pooling, NO timeout, NO retry.
@@ -815,6 +817,14 @@ async function patchedFetch(
       (deps.nativeFetch as FetchWithDispatcher | undefined) ?? originalFetchWithDispatcher;
     let lastDispatcherError: unknown = null;
     const directHeadersTimeoutMs = resolveDirectHeadersTimeoutMs();
+    // nnd.21 候A: the fresh-socket retry already ruled out pool poisoning, so it
+    // must not re-copy the flat probe window — cold-prefill upstreams (ark-class
+    // anthropic-compatible) legally withhold headers past 45s while the stream
+    // budget would have allowed up to 120s. Align segment two with that ceiling.
+    const freshSocketHeadersTimeoutMs = resolveFreshSocketResponseStartTimeoutMs(
+      directHeadersTimeoutMs,
+      STREAM_READINESS_MAX_TIMEOUT_MS
+    );
     let targetHostForLogs = "";
     try {
       targetHostForLogs = new URL(targetUrl).host;
@@ -822,6 +832,7 @@ async function patchedFetch(
       // ignore — logging is best-effort
     }
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const attemptWindowMs = attempt === 0 ? directHeadersTimeoutMs : freshSocketHeadersTimeoutMs;
       try {
         return await directFetchWithBoundedResponseStart(
           input,
@@ -830,13 +841,13 @@ async function patchedFetch(
             dispatcher: attempt === 0 ? getDefaultDispatcher() : getRetryDispatcher(),
           },
           _undiciDirect,
-          directHeadersTimeoutMs
+          attemptWindowMs
         );
       } catch (dispatcherError) {
         if (isDirectResponseStartTimeout(dispatcherError)) {
           if (attempt === 0 && maxAttempts > 1) {
             console.warn(
-              `[ProxyFetch] Direct response-start timeout (${directHeadersTimeoutMs}ms) on pooled dispatcher — retrying on fresh no-keep-alive dispatcher: ${targetHostForLogs}`
+              `[ProxyFetch] Direct response-start timeout (${attemptWindowMs}ms) on pooled dispatcher — retrying on fresh no-keep-alive dispatcher (window ${freshSocketHeadersTimeoutMs}ms): ${targetHostForLogs}`
             );
             lastDispatcherError = dispatcherError;
             continue;
