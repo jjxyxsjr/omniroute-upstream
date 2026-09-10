@@ -24,6 +24,7 @@ import {
   directFetchWithBoundedResponseStart,
   isDirectResponseStartTimeout,
   resolveDirectHeadersTimeoutMs,
+  resolveNonStreamTotalBudgetMs,
 } from "../utils/directResponseStartTimeout.ts";
 import { applyProviderRequestDefaults } from "../services/providerRequestDefaults.ts";
 import { stripUnsupportedParams } from "../translator/paramSupport.ts";
@@ -39,7 +40,10 @@ import { translateRequest } from "../translator/index.ts";
 import { FORMATS } from "../translator/formats.ts";
 import { createSSETransformStreamWithLogger } from "../utils/stream.ts";
 import { ensureStreamReadiness } from "../utils/streamReadiness.ts";
-import { STREAM_READINESS_TIMEOUT_MS } from "../config/constants.ts";
+import {
+  STREAM_READINESS_MAX_TIMEOUT_MS,
+  STREAM_READINESS_TIMEOUT_MS,
+} from "../config/constants.ts";
 import { resolveSuppressThinkClose, THINKING_MARKER_HEADER } from "../utils/thinkCloseMarker.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -509,13 +513,25 @@ export class GlmExecutor extends DefaultExecutor {
       // nnd.14: non-streaming requests previously had NO response-start bound (301s
       // client-timeout hangs, 2026-09-03 storm's 17 rows). Streaming keeps its existing
       // readiness/deadline machinery — only the non-stream fetch gets the direct bound.
+      // nnd.22 补丁①: the bound is a TOTAL outer budget sized to the inner worst case,
+      // NOT a flat copy of the pooled window. The global fetch here is proxyFetch —
+      // its direct path already runs the two-segment logic internally (45s pooled
+      // poisoning probe → fresh socket up to the stream-readiness ceiling). The old
+      // flat 45s outer bound short-circuited all of that: non-stream bodies needing
+      // >45s to first byte got a single-shot wall on every rotated account
+      // (2026-09-10 11:25-12:05 BJ storm, 124KB context-handoff bodies on
+      // glm-5.3-flash). Worst case now = pooled + fresh + 5s slack (prod ≈170s),
+      // preserving nnd.14's anti-hang intent.
       response = input.stream
         ? await fetch(url, fetchOpts)
         : await directFetchWithBoundedResponseStart(
             url,
             fetchOpts as RequestInit,
             fetch,
-            resolveDirectHeadersTimeoutMs()
+            resolveNonStreamTotalBudgetMs(
+              resolveDirectHeadersTimeoutMs(),
+              STREAM_READINESS_MAX_TIMEOUT_MS
+            )
           );
     } finally {
       if (timeoutId) clearTimeout(timeoutId);

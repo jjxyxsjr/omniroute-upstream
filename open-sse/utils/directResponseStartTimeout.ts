@@ -45,6 +45,27 @@ export function resolveFreshSocketResponseStartTimeoutMs(
   return Math.max(pooledMs, floor);
 }
 
+/**
+ * nnd.22 补丁①: TOTAL outer budget for a NON-STREAMING executor call whose
+ * underlying fetch is the patched global (proxyFetch) — its direct path runs
+ * the two-segment logic (pooled probe + fresh-socket window) internally, so
+ * the executor-level safety bound must cover the full inner worst case
+ * (pooled + fresh + slack), never a flat copy of the pooled window. The flat
+ * 45s outer bound (nnd.14 era) short-circuited the inner logic: non-stream
+ * requests got a single 45s wall with no fresh-socket retry — observed live
+ * 2026-09-10 11:25-12:05 BJ as a 30+-request 504 storm on glm-5.3-flash
+ * (124KB context-handoff bodies needing >45s to first byte; all 7 rotated
+ * accounts "silent" because every attempt died at exactly 45s).
+ */
+export function resolveNonStreamTotalBudgetMs(
+  pooledMs: number,
+  streamReadinessMaxTimeoutMs: number
+): number {
+  if (!(pooledMs > 0)) return pooledMs;
+  const freshMs = resolveFreshSocketResponseStartTimeoutMs(pooledMs, streamReadinessMaxTimeoutMs);
+  return pooledMs + freshMs + 5_000;
+}
+
 function createDirectResponseStartTimeout(timeoutMs: number): Error & { code: string } {
   const err = new Error(
     `Direct response did not start within ${timeoutMs}ms — retrying on a fresh socket`
