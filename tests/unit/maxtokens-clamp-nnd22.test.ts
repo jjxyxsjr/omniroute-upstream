@@ -78,3 +78,20 @@ test("nnd.22 ① non-stream total budget covers the inner two-segment worst case
   // 流预算非法 → 退回 pooled+pooled+5s（不放大到无界）。
   assert.equal(resolveNonStreamTotalBudgetMs(45_000, Number.NaN), 95_000);
 });
+
+test("nnd.22 ② clamp: thinking budget squeezed to keep the anthropic pair valid", () => {
+  // 实测形态：客户端 8192 + 网关自适应注入 budget 170394 → 合成 178586 被钳。
+  const body = {
+    model: "ark/ark-code-latest",
+    max_tokens: 178586,
+    thinking: { type: "enabled", budget_tokens: 170394 },
+  };
+  assert.equal(clampTopLevelMaxTokens(body, 131072), true);
+  assert.equal(body.max_tokens, 131072);
+  assert.equal(body.thinking.budget_tokens, 131072 - 1024);
+  // 预算本来就小于钳后上限时不動。
+  const small = { max_tokens: 9000, thinking: { type: "enabled", budget_tokens: 4096 } };
+  clampTopLevelMaxTokens(small, 8191);
+  assert.equal(small.max_tokens, 8191);
+  assert.equal(small.thinking.budget_tokens, 4096);
+});

@@ -73,14 +73,27 @@ export function __test_resetLearnedMaxTokensCaps(): void {
 
 /**
  * Clamp a top-level `max_tokens` (anthropic/openai request shape) down to the
- * ceiling. Returns true when the body was actually modified.
+ * ceiling. When the body carries Claude-style thinking with a budget_tokens
+ * that would now exceed max_tokens (the anthropic contract requires
+ * budget_tokens < max_tokens — the gateway's adaptive thinkingBudget injection
+ * is exactly what inflates max_tokens past upstream ceilings: client 8192 +
+ * injected budget 170394 = 178586, observed 2026-09-09/10), the budget is
+ * squeezed to max_tokens - 1024 so the clamped pair stays contract-valid.
+ * Returns true when the body was actually modified.
  */
 export function clampTopLevelMaxTokens(body: unknown, cap: number): boolean {
   if (!body || typeof body !== "object" || Array.isArray(body)) return false;
   if (!(Number.isFinite(cap) && cap > 0)) return false;
-  const rec = body as { max_tokens?: unknown };
+  const rec = body as {
+    max_tokens?: unknown;
+    thinking?: { budget_tokens?: unknown } | null;
+  };
   const current = Number(rec.max_tokens);
   if (!Number.isFinite(current) || current <= cap) return false;
   rec.max_tokens = cap;
+  const budget = Number(rec.thinking?.budget_tokens);
+  if (Number.isFinite(budget) && budget > cap - 1024) {
+    rec.thinking = { ...rec.thinking, budget_tokens: Math.max(cap - 1024, 0) };
+  }
   return true;
 }
