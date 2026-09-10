@@ -21,6 +21,12 @@ import {
   parseThinkingBudgetMax,
 } from "../services/learnedThinkingCaps.ts";
 import {
+  clampTopLevelMaxTokens,
+  getLearnedMaxTokensCap,
+  parseMaxTokensCeiling,
+  recordLearnedMaxTokensCap,
+} from "../services/learnedMaxTokensCaps.ts";
+import {
   recordLearnedReasoningEffort,
   parseReasoningEffortEnum,
 } from "../services/learnedReasoningEffortCaps.ts";
@@ -830,6 +836,7 @@ export class BaseExecutor {
     // loop. The learned cap is also recorded process-wide via
     // recordLearnedThinkingCap so future requests skip the 400 entirely.
     let thinkingBudgetClampedMax: number | null = null;
+    let maxTokensClamped = false;
     // Set by the reasoning_effort 4xx clamp-and-retry below — guards the same
     // "fires at most once per URL" invariant as thinkingBudgetClampedMax above.
     let reasoningEffortClamped = false;
@@ -900,6 +907,13 @@ export class BaseExecutor {
       // fallback URL). No-op when nothing has been learned this execute().
       if (thinkingBudgetClampedMax !== null) {
         clampNestedThinkingBudget(transformedBody, thinkingBudgetClampedMax);
+      }
+      // nnd.22 ②: process-wide learned max_tokens ceiling (recorded by a previous
+      // 400 clamp-and-retry on this provider+model) — pre-clamp so repeated
+      // oversized client budgets stop paying the 400 round-trip at all.
+      const learnedMaxTokensCap = getLearnedMaxTokensCap(this.provider, model);
+      if (learnedMaxTokensCap !== null) {
+        clampTopLevelMaxTokens(transformedBody, learnedMaxTokensCap);
       }
 
       try {
@@ -1533,6 +1547,39 @@ export class BaseExecutor {
               );
               response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
             }
+          }
+        }
+
+        // max_tokens 400 clamp-and-retry (nnd.22 ②, any provider). Some upstreams
+        // advertise a max_tokens ceiling lower than what clients legitimately ask
+        // (Ark anthropic endpoint: "expected a value <= 131072, but got 178586"
+        // while GLM's OpenAI endpoint accepts the same body). Parse the advertised
+        // ceiling, record it process-wide (future requests pre-clamp via
+        // getLearnedMaxTokensCap above), clamp the live body, retry the same URL
+        // once. Subsequent requests never pay this 400→retry round-trip.
+        if (
+          response.status === HTTP_STATUS.BAD_REQUEST &&
+          !maxTokensClamped &&
+          transformedBody &&
+          typeof transformedBody === "object"
+        ) {
+          const errText = await response
+            .clone()
+            .text()
+            .catch(() => "");
+          const ceiling = parseMaxTokensCeiling(errText);
+          if (ceiling !== null && clampTopLevelMaxTokens(transformedBody, ceiling)) {
+            maxTokensClamped = true;
+            recordLearnedMaxTokensCap(this.provider, model, ceiling);
+            let retryBody = JSON.stringify(transformedBody);
+            if (usesClaudeCodeProtocol || this.provider === "claude") {
+              retryBody = await signRequestBody(retryBody);
+            }
+            log?.info?.(
+              "MAX_TOKENS",
+              `Upstream 400 rejected max_tokens on ${url} — clamped to ${ceiling} and retrying (learned for ${this.provider}/${model})`
+            );
+            response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
           }
         }
 
