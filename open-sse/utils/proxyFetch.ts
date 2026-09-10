@@ -26,6 +26,11 @@ import {
   resolveFreshSocketResponseStartTimeoutMs,
 } from "./directResponseStartTimeout.ts";
 import { STREAM_READINESS_MAX_TIMEOUT_MS } from "../config/constants.ts";
+import {
+  applyFirstByteProfileToWindow,
+  getFirstByteP90Ms,
+  recordFirstByteMs,
+} from "../services/upstreamProfiles.ts";
 
 // #9100: relay egress (Vercel / Deno / Cloudflare edge functions) used to go
 // through bare `originalFetch` — NO connection pooling, NO timeout, NO retry.
@@ -824,9 +829,10 @@ async function patchedFetch(
     // verified by direct probing 2026-09-10, see 155 #49 correction) would be
     // killed while the stream budget would have allowed them. Align segment
     // two with that ceiling (prod 120s; code default 180s).
-    const freshSocketHeadersTimeoutMs = resolveFreshSocketResponseStartTimeoutMs(
+    const freshSocketHeadersTimeoutMs = applyFirstByteProfileToWindow(
+      resolveFreshSocketResponseStartTimeoutMs(directHeadersTimeoutMs, STREAM_READINESS_MAX_TIMEOUT_MS),
       directHeadersTimeoutMs,
-      STREAM_READINESS_MAX_TIMEOUT_MS
+      getFirstByteP90Ms(targetHostForLogs)
     );
     let targetHostForLogs = "";
     try {
@@ -836,6 +842,7 @@ async function patchedFetch(
     }
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const attemptWindowMs = attempt === 0 ? directHeadersTimeoutMs : freshSocketHeadersTimeoutMs;
+      const attemptStartedAt = Date.now();
       try {
         return await directFetchWithBoundedResponseStart(
           input,
@@ -845,7 +852,13 @@ async function patchedFetch(
           },
           _undiciDirect,
           attemptWindowMs
-        );
+        ).then((res) => {
+          // nnd.23 ②: record response-start latency for the host×hour profile
+          // (headers just arrived — this is exactly the metric the window
+          // resolver consults; body streaming time is NOT included).
+          recordFirstByteMs(targetHostForLogs, Date.now() - attemptStartedAt);
+          return res;
+        });
       } catch (dispatcherError) {
         if (isDirectResponseStartTimeout(dispatcherError)) {
           if (attempt === 0 && maxAttempts > 1) {
