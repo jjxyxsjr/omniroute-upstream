@@ -26,13 +26,13 @@ export function resolveDirectHeadersTimeoutMs(
  * nnd.21 候A: response-start window for the SECOND direct attempt (fresh
  * no-keep-alive socket). The pooled attempt keeps the operator's
  * OMNIROUTE_DIRECT_HEADERS_TIMEOUT_MS as a poisoning probe (a half-open pooled
- * socket fails instantly on a fresh one), but ark-class anthropic-compatible
- * upstreams withhold even HTTP headers through a cold prefill (~45-50s for a
- * 66k body) — a flat second 45s kills a healthy slow upstream before the
- * stream-readiness budget (60-120s adaptive) ever starts counting. Align the
- * fresh-socket window with that budget's ceiling; worst case stays bounded at
- * first + max. Never narrows below the pooled window, and a disabled bound
- * (<=0) disables both segments.
+ * socket fails instantly on a fresh one), while ark-class anthropic-compatible
+ * upstreams send nothing — not even HTTP headers — until they are ready.
+ * ⚠️ 2026-09-10 更正（155 #49，直连对账证伪）：初版注释把"66k 冷体需 ~45-50s"
+ * 写成尺寸固有行为——实测同量级冷体直连 14 时窗 8-9s 即吐头；45s+ 沉默实为上游
+ * 负载窗摆动（15-30 倍族），时长是分布不是常数。窗口不收紧的结论不变（9-09
+ * 误杀有同账号同刻 20×200 实锤），但预算值应来自分时段画像（nnd.23 主题②）
+ * 而非任何单点常数。
  */
 export function resolveFreshSocketResponseStartTimeoutMs(
   pooledMs: number,

@@ -818,9 +818,12 @@ async function patchedFetch(
     let lastDispatcherError: unknown = null;
     const directHeadersTimeoutMs = resolveDirectHeadersTimeoutMs();
     // nnd.21 候A: the fresh-socket retry already ruled out pool poisoning, so it
-    // must not re-copy the flat probe window — cold-prefill upstreams (ark-class
-    // anthropic-compatible) legally withhold headers past 45s while the stream
-    // budget would have allowed up to 120s. Align segment two with that ceiling.
+    // must not re-copy the flat probe window — slow-to-first-byte upstreams
+    // (ark-class anthropic-compatible send nothing, headers included, until
+    // ready; first-byte time swings 8s→45s+ by load window, NOT size-inherent —
+    // verified by direct probing 2026-09-10, see 155 #49 correction) would be
+    // killed while the stream budget would have allowed them. Align segment
+    // two with that ceiling (prod 120s; code default 180s).
     const freshSocketHeadersTimeoutMs = resolveFreshSocketResponseStartTimeoutMs(
       directHeadersTimeoutMs,
       STREAM_READINESS_MAX_TIMEOUT_MS

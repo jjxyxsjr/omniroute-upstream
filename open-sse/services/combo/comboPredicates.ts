@@ -125,7 +125,7 @@ export function clampComboDepth(value: unknown): number {
 /**
  * nnd.20: separate, much tighter budget for READINESS-DEADLINE failures across
  * a combo run. The global-attempts cap (30) is calibrated for fast failures
- * (429/5xx swap-outs); a readiness deadline costs a full 60-120s window AND a
+ * (429/5xx swap-outs); a readiness deadline costs a full readiness window (prod 60-120s; code default 80-180s) AND a
  * heavyweight body re-dispatch each time, so a handful of them already
  * multiplies user latency and gateway heap footprint (9-08 OOM path). Override
  * with OMNIROUTE_COMBO_MAX_DEADLINE_FAILURES.

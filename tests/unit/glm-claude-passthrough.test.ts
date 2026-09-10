@@ -205,10 +205,11 @@ test("nnd.16: transport inference must NOT split from chatCore format (two-layer
   ) as Record<string, unknown>;
   // openai体必须被翻译(现状已对——nnd.14的looksClaudeShaped兜住了)
   const _tools = (out.tools as Array<Record<string, unknown>>);
-  // 更关键: transport推断本身——psd单方面targetFormat不应再驱动anthropic
-  // 现状: getGlmPrimaryTransport({targetFormat:'claude'})='anthropic' ← 分裂源头
-  // 修后: 无customModels对齐信号时不应推断anthropic(由looksClaudeShaped在执行器内兜底)
-  assert.ok(true, "transport推断修正见下方单独断言");
+  // transport 推断历史：nnd.16 v1 曾计划"无 customModels 对齐信号不推断 anthropic"，
+  // v2 最终形态相反——psd 单方面 targetFormat 驱动 anthropic（getGlmPrimaryTransport
+  // 推断+半开告警，见 glmProvider.ts v2 注释与下方 v2 断言 getGlmPrimaryTransport
+  // (PASSTHROUGH_PSD)==='anthropic'）。本空测试仅为历史叙事占位，可随下次触碰删除。
+  assert.ok(true, "transport 推断的现行断言在 v2 测试块");
 });
 
 test("nnd.16: glm-cn 1210 image-format 400 carries non-retryable semantics", async () => {

@@ -89,7 +89,7 @@ test("nnd.22 ② clamp: thinking budget squeezed to keep the anthropic pair vali
   assert.equal(clampTopLevelMaxTokens(body, 131072), true);
   assert.equal(body.max_tokens, 131072);
   assert.equal(body.thinking.budget_tokens, 131072 - 1024);
-  // 预算本来就小于钳后上限时不動。
+  // 预算本来就小于钳后上限时不动。
   const small = { max_tokens: 9000, thinking: { type: "enabled", budget_tokens: 4096 } };
   clampTopLevelMaxTokens(small, 8191);
   assert.equal(small.max_tokens, 8191);

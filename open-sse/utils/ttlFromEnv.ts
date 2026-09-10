@@ -9,6 +9,8 @@
  * Semantics (identical to the originals):
  *   unset / blank / NaN / ≤0 → defaultMinutes
  *   positive integer        → that many minutes
+ *
+ * Return value is MILLISECONDS (*60*1000); consumers name it *_MS.
  */
 export function resolveTtlMinutesFromEnv(
   envVarName: string,

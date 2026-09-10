@@ -1761,7 +1761,7 @@ export class BaseExecutor {
         const err = error instanceof Error ? error : new Error(String(error));
         if (err.name === "TimeoutError") {
           // nnd.21 候B: log the REAL message. A propagated lower-layer bound
-          // (e.g. DIRECT_RESPONSE_START_TIMEOUT's 45s direct response-start
+          // (e.g. DIRECT_RESPONSE_START_TIMEOUT's direct response-start window (prod 45s; code default 30s)
           // window) is also name="TimeoutError" — the old fixed-format line
           // misreported those as "Fetch timeout after <configured executor
           // timeout>ms" (observed: a 45s kill logged as 900000ms, 2026-09-09).
