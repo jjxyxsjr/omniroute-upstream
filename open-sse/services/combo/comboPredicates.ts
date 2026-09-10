@@ -542,3 +542,28 @@ export function isModelScoped400(errorText: string | null | undefined): boolean 
     /\bdoes\s+not\s+support\s+(?:the\s+)?responses\s+api\b/i.test(text)
   );
 }
+
+/**
+ * nnd.23 ①: default STARTUP rotation budget for combos that don't set
+ * comboTimeoutMs themselves. The upstream rotation-cutoff (combo.ts: "stop
+ * trying further targets once elapsed >= comboTimeoutMs") and both loop
+ * safety timers are wired to comboTimeoutMs but default it to 0 = cutoff
+ * dormant, safety falls back to the blunt 10-min floor — so a stalled
+ * startup phase could rotate seats for minutes (observed: 3 seats × ~90s =
+ * 303s user wait, 2026-09-10 midnight window). This default wakes the cutoff
+ * for every combo: after ~240s of startup (dispatch → first content), no NEW
+ * seat rounds start — in-flight attempts are untouched (the safety floor
+ * stays at COMBO_LOOP_SAFETY_TIMEOUT_MS via Math.max, so long NON-streaming
+ * generations that legitimately exceed the startup budget are never killed
+ * by this knob). Per-combo config still wins; explicit "0" disables.
+ */
+export function resolveComboStartupBudgetMs(
+  env: Record<string, string | undefined> = process.env
+): number {
+  const raw = env.OMNIROUTE_COMBO_STARTUP_BUDGET_MS;
+  if (raw == null || raw.trim() === "") return 240_000;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return 240_000;
+  if (parsed === 0) return 0;
+  return Math.min(600_000, Math.max(60_000, Math.floor(parsed)));
+}

@@ -182,6 +182,7 @@ import {
 } from "../../src/sse/services/cooldownAwareRetry.ts";
 import { dispatchChaosFromCombo, type ChaosTuning } from "./autoCombo/chaosEngine.ts";
 import { clampDeadlineFailureBudget,
+  resolveComboStartupBudgetMs,
   TRANSIENT_FOR_SEMAPHORE,
   MAX_FALLBACK_WAIT_MS,
   MAX_GLOBAL_ATTEMPTS,
@@ -1038,7 +1039,9 @@ async function handleComboChatInner({
   // spends iterating through targets. After each target completes, if elapsed time
   // exceeds comboTimeoutMs, remaining targets are skipped and a 504 with aggregated
   // error diagnostics is returned. 0 = disabled (backward-compatible, unlimited).
-  const comboTimeoutMs = config.comboTimeoutMs || 0;
+  // nnd.23 ①: wake the dormant rotation cutoff (setup already resolves the
+  // env default; this local re-read keeps per-call config precedence).
+  const comboTimeoutMs = config.comboTimeoutMs || resolveComboStartupBudgetMs();
   const comboStartTime = Date.now();
   let comboExpired = false;
   // Accumulator for per-model error details across targets in the current set try.
@@ -1155,7 +1158,10 @@ async function handleComboChatInner({
       // actionable 504 instead of dying silently. `comboExpired` is flipped so the
       // target loop stops launching new work; the existing comboExpired branch
       // returns the aggregated 504.
-      const loopSafetyMs = comboTimeoutMs > 0 ? comboTimeoutMs : COMBO_LOOP_SAFETY_TIMEOUT_MS;
+      // nnd.23 ①: the startup budget must SHRINK rotation, never the safety
+      // floor — a tight budget would otherwise kill legitimately long
+      // NON-streaming generations still inside their single attempt.
+      const loopSafetyMs = Math.max(comboTimeoutMs, COMBO_LOOP_SAFETY_TIMEOUT_MS);
       let loopSafetyFired = false;
       let loopSafetyTimer: ReturnType<typeof setTimeout> | null = null;
       const loopSafetyPromise = new Promise<Response>((resolve) => {
@@ -3185,8 +3191,9 @@ async function handleRoundRobinCombo({
   // it fires, rrExpired flips and every subsequent model attempt short-circuits
   // to the 504. Cleaned up in the loop's finally.
   const rrConfiguredTimeoutMs = (config as { comboTimeoutMs?: number }).comboTimeoutMs ?? 0;
-  const rrLoopSafetyMs =
-    rrConfiguredTimeoutMs > 0 ? rrConfiguredTimeoutMs : COMBO_LOOP_SAFETY_TIMEOUT_MS;
+  // nnd.23 ①: same safety-floor rule as the serial path (Math.max) — the
+  // startup budget bounds ROTATION, not in-flight generation.
+  const rrLoopSafetyMs = Math.max(rrConfiguredTimeoutMs, COMBO_LOOP_SAFETY_TIMEOUT_MS);
   let rrExpired = false;
   let rrLoopSafetyTimer: ReturnType<typeof setTimeout> | null = null;
   let rrResolveSafety: ((res: Response) => void) | null = null;

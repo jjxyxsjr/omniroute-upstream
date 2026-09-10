@@ -22,6 +22,7 @@ import { resolveResilienceSettings } from "../../../src/lib/resilience/settings"
 import { FETCH_TIMEOUT_MS } from "../../config/constants.ts";
 import { deriveComboSessionKey } from "./autoStrategy.ts";
 import type { ComboContext } from "./context.ts";
+import { resolveComboStartupBudgetMs } from "./comboPredicates.ts";
 
 export interface ComboSetup {
   strategy: ReturnType<typeof normalizeRoutingStrategy>;
@@ -114,7 +115,9 @@ export function phaseComboSetup(ctx: ComboContext): ComboSetup {
     strategy,
     resilienceSettings.comboCooldownWait
   );
-  const comboTimeoutMs = config.comboTimeoutMs || 0;
+  // nnd.23 ①: wake the dormant rotation cutoff with the startup-budget
+  // default (per-combo config still wins; see comboPredicates).
+  const comboTimeoutMs = config.comboTimeoutMs || resolveComboStartupBudgetMs();
   const reasoningTokenBufferEnabled = config.reasoningTokenBufferEnabled !== false;
 
   return {
