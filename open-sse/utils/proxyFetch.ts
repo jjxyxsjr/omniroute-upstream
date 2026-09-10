@@ -829,17 +829,20 @@ async function patchedFetch(
     // verified by direct probing 2026-09-10, see 155 #49 correction) would be
     // killed while the stream budget would have allowed them. Align segment
     // two with that ceiling (prod 120s; code default 180s).
-    const freshSocketHeadersTimeoutMs = applyFirstByteProfileToWindow(
-      resolveFreshSocketResponseStartTimeoutMs(directHeadersTimeoutMs, STREAM_READINESS_MAX_TIMEOUT_MS),
-      directHeadersTimeoutMs,
-      getFirstByteP90Ms(targetHostForLogs)
-    );
     let targetHostForLogs = "";
     try {
       targetHostForLogs = new URL(targetUrl).host;
     } catch {
       // ignore — logging is best-effort
     }
+
+    // nnd.23 ②: profile-aware fresh-socket window (host known only after the
+    // block above — profiles are keyed by target host × hour).
+    const freshSocketHeadersTimeoutMs = applyFirstByteProfileToWindow(
+      resolveFreshSocketResponseStartTimeoutMs(directHeadersTimeoutMs, STREAM_READINESS_MAX_TIMEOUT_MS),
+      directHeadersTimeoutMs,
+      getFirstByteP90Ms(targetHostForLogs)
+    );
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const attemptWindowMs = attempt === 0 ? directHeadersTimeoutMs : freshSocketHeadersTimeoutMs;
       const attemptStartedAt = Date.now();
