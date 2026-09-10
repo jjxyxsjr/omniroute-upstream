@@ -16,12 +16,12 @@ import { resetAllCircuitBreakers } from "../../src/shared/utils/circuitBreaker.t
 const textEncoder = new TextEncoder();
 
 function createLog() {
-  const entries: any[] = [];
+  const entries: { level: string; tag: string; msg: string }[] = [];
   return {
-    info: (tag: any, msg: any) => entries.push({ level: "info", tag, msg }),
-    warn: (tag: any, msg: any) => entries.push({ level: "warn", tag, msg }),
-    error: (tag: any, msg: any) => entries.push({ level: "error", tag, msg }),
-    debug: (tag: any, msg: any) => entries.push({ level: "debug", tag, msg }),
+    info: (tag: string, msg: string) => entries.push({ level: "info", tag, msg }),
+    warn: (tag: string, msg: string) => entries.push({ level: "warn", tag, msg }),
+    error: (tag: string, msg: string) => entries.push({ level: "error", tag, msg }),
+    debug: (tag: string, msg: string) => entries.push({ level: "debug", tag, msg }),
     entries,
   };
 }
@@ -84,7 +84,7 @@ test("nnd.23 ① combo: rotation cutoff stops new seat rounds once the budget el
         comboTimeoutMs: 120, // 预算 120ms：第一个席位 200ms 后才失败，届时不再开第二轮
       },
     },
-    handleSingleModel: async (_body: any, modelStr: string) => {
+    handleSingleModel: async (_body: Record<string, unknown>, modelStr: string) => {
       calls.push(modelStr);
       if (modelStr === "glm/slow-fail") {
         await new Promise((r) => setTimeout(r, 200));
@@ -94,7 +94,7 @@ test("nnd.23 ① combo: rotation cutoff stops new seat rounds once the budget el
     },
     isModelAvailable: async () => true,
     log,
-  } as any);
+  } as Parameters<typeof handleComboChat>[0]);
   assert.deepEqual(calls, ["glm/slow-fail"]);
   const text = await result.text();
   assert.match(text, /timeout|504|unavailable/i);
@@ -113,13 +113,13 @@ test("nnd.23 ① combo: budget does not touch a fast first seat (no regression)"
       models: [{ model: "glm/fast", weight: 0 }],
       config: { maxRetries: 0, retryDelayMs: 0, comboTimeoutMs: 240_000 },
     },
-    handleSingleModel: async (_body: any, modelStr: string) => {
+    handleSingleModel: async (_body: Record<string, unknown>, modelStr: string) => {
       calls.push(modelStr);
       return okStreamResponse("budget untouched on success");
     },
     isModelAvailable: async () => true,
     log,
-  } as any);
+  } as Parameters<typeof handleComboChat>[0]);
   assert.deepEqual(calls, ["glm/fast"]);
   const text = await result.text();
   assert.match(text, /budget untouched on success/);
