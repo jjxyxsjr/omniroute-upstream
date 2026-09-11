@@ -566,6 +566,20 @@ export function computeNonStreamExecutionExpirationMs(
   return Math.max(baseMs, Math.min(budgetMs, 900_000));
 }
 
+// nnd.24 ①: streaming executor jobs resolve at SSE handoff, so their
+// execution deadline must cover the worst-case two-segment headers window
+// (pooled probe + fresh socket, ~170s in prod). The legacy `?? maxWaitMs`
+// fallback (120s in prod) sat below that window's 165s tail and killed
+// legitimate fresh-socket waits >75s (ark cold-prefill tail). maxTokens=0
+// keeps the token scaler out — token budgeting is a non-stream concern —
+// while the env override keeps the same semantics as the non-stream path.
+export function computeStreamingExecutionExpirationMs(
+  headersPhaseBudgetMs,
+  env = process.env
+): number {
+  return computeNonStreamExecutionExpirationMs(headersPhaseBudgetMs, 0, env);
+}
+
 export async function withRateLimit(provider, connectionId, model, fn, signal = null, opts) {
   if (!enabledConnections.has(connectionId)) {
     return fn();

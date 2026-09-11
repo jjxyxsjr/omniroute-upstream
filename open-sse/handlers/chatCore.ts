@@ -150,6 +150,11 @@ import {
   ensureStreamReadiness,
   parseAnyByteAtHeader,
 } from "../utils/streamReadiness.ts";
+import {
+  resolveDirectHeadersTimeoutMs,
+  resolveNonStreamTotalBudgetMs,
+} from "../utils/directResponseStartTimeout.ts";
+import { STREAM_READINESS_MAX_TIMEOUT_MS } from "../config/constants.ts";
 import { resolveSuppressThinkClose, THINKING_MARKER_HEADER } from "../utils/thinkCloseMarker.ts";
 import { resolveStreamReadinessTimeout } from "../utils/streamReadinessPolicy.ts";
 import { resolveAgentGoalPolicy } from "../utils/agentGoalPolicy.ts";
@@ -398,6 +403,7 @@ import {
   updateFromResponseBody,
   initializeRateLimits,
   computeNonStreamExecutionExpirationMs,
+  computeStreamingExecutionExpirationMs,
   resolveRequestQueueMaxWaitMs,
 } from "../services/rateLimitManager.ts";
 import * as localLimiterErrors from "../services/rateLimitManager/errors.ts";
@@ -3136,8 +3142,18 @@ export async function handleChatCore({
                 // 2a: scale the execution deadline for large non-streaming
                 // generations instead of killing them at the legacy 120s while
                 // the upstream is legitimately still generating.
+                // nnd.24 ①: streaming jobs resolve at SSE handoff — their
+                // deadline must cover the two-segment headers window, not the
+                // legacy 120s queue budget.
                 bodyToSend?.stream === true
-                  ? undefined
+                  ? {
+                      executionExpirationMs: computeStreamingExecutionExpirationMs(
+                        resolveNonStreamTotalBudgetMs(
+                          resolveDirectHeadersTimeoutMs(),
+                          STREAM_READINESS_MAX_TIMEOUT_MS
+                        )
+                      ),
+                    }
                   : {
                       executionExpirationMs: computeNonStreamExecutionExpirationMs(
                         resolveRequestQueueMaxWaitMs(provider, undefined, attemptConnectionId),

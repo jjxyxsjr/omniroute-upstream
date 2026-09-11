@@ -11,7 +11,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { computeNonStreamExecutionExpirationMs } = await import(
+const { computeNonStreamExecutionExpirationMs, computeStreamingExecutionExpirationMs } = await import(
   "../../open-sse/services/rateLimitManager.ts"
 );
 
@@ -38,5 +38,24 @@ test("2a junk env falls back to computation", () => {
   assert.equal(
     computeNonStreamExecutionExpirationMs(120_000, 32_768, { OMNIROUTE_EXECUTION_EXPIRATION_MS: "junk" }),
     32_768 * 20
+  );
+});
+
+test("nnd.24① streaming deadline keeps the full headers-phase budget", () => {
+  // Prod shape: pooled 45s probe + fresh 120s + 5s slack = 170s. The legacy
+  // `?? maxWaitMs` fallback (120s) sat below the 165s two-door tail and
+  // killed fresh-socket waits >75s.
+  assert.equal(computeStreamingExecutionExpirationMs(170_000, {}), 170_000);
+  assert.equal(computeStreamingExecutionExpirationMs(165_000, {}), 165_000);
+});
+
+test("nnd.24① streaming env override wins (incl. 0 = off)", () => {
+  assert.equal(
+    computeStreamingExecutionExpirationMs(170_000, { OMNIROUTE_EXECUTION_EXPIRATION_MS: "600000" }),
+    600_000
+  );
+  assert.equal(
+    computeStreamingExecutionExpirationMs(170_000, { OMNIROUTE_EXECUTION_EXPIRATION_MS: "0" }),
+    0
   );
 });
