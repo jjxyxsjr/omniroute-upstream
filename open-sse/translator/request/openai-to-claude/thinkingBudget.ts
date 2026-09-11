@@ -1,4 +1,5 @@
 import { capMaxOutputTokens } from "../../../../src/lib/modelCapabilities.ts";
+import { getLearnedMaxTokensCap } from "../../../services/learnedMaxTokensCaps.ts";
 
 // Anthropic constraints for the thinking + max_tokens contract:
 //   - thinking.budget_tokens must be >= 1024 when thinking is enabled
@@ -10,10 +11,17 @@ const MIN_RESPONSE_ROOM = 1024;
 function safeCapMaxOutputTokens(model: string, provider?: string | null): number | null {
   try {
     const cap = capMaxOutputTokens(provider ? { provider, model } : model);
-    return typeof cap === "number" && cap > 0 ? cap : null;
+    if (typeof cap === "number" && cap > 0) return cap;
   } catch {
-    return null;
+    // fall through to the learned-cap fallback below
   }
+  // nnd.24 ④ (2026-09-11 谭婧琳 复发): custom anthropic-compatible nodes resolve
+  // NO registry/spec cap, so the composed `room + budget` went out unbounded
+  // (8192 + 170394 = 178586 vs Ark's 131072). Once ANY upstream 400 taught us
+  // the ceiling (#54 learnedMaxTokensCaps), honor it HERE so the composition
+  // clamps itself instead of re-sending oversized bodies every request.
+  const learned = getLearnedMaxTokensCap(provider, model);
+  return learned !== null && learned > 0 ? learned : null;
 }
 
 /**

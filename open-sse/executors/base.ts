@@ -1580,6 +1580,25 @@ export class BaseExecutor {
               `Upstream 400 rejected max_tokens on ${url} — clamped to ${ceiling} and retrying (learned for ${this.provider}/${model})`
             );
             response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
+          } else if (ceiling !== null && !clampTopLevelMaxTokens(transformedBody, ceiling)) {
+            // nnd.24 ④ forensics: the upstream DID advertise a max_tokens ceiling
+            // and the body is already at/below it, yet still rejected — surface
+            // the pair so a repeated rejection (e.g. a second oversized field)
+            // is diagnosable instead of silently looping the same 400.
+            log?.warn?.(
+              "MAX_TOKENS",
+              `Upstream 400 rejected max_tokens on ${url} with ceiling ${ceiling}, but body max_tokens already ≤ ceiling — not retrying (outbound body may carry a different oversized field)`
+            );
+          } else if (/max_tokens/i.test(errText)) {
+            // nnd.24 ④ forensics (2026-09-11 谭婧琳复发): the error is about
+            // max_tokens but the ceiling text is unparseable (or errText came
+            // back empty — body read failure). Leave a trail: the 9-11
+            // production suppression left zero evidence because this branch
+            // was silent.
+            log?.warn?.(
+              "MAX_TOKENS",
+              `Upstream 400 mentioned max_tokens but no ceiling parsed on ${url} — errText head: ${errText.slice(0, 200) || "(empty)"}. Body: max_tokens=${JSON.stringify((transformedBody as Record<string, unknown>).max_tokens)}`
+            );
           }
         }
 
