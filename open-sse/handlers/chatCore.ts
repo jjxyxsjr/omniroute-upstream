@@ -154,7 +154,6 @@ import {
   resolveDirectHeadersTimeoutMs,
   resolveNonStreamTotalBudgetMs,
 } from "../utils/directResponseStartTimeout.ts";
-import { STREAM_READINESS_MAX_TIMEOUT_MS } from "../config/constants.ts";
 import { resolveSuppressThinkClose, THINKING_MARKER_HEADER } from "../utils/thinkCloseMarker.ts";
 import { resolveStreamReadinessTimeout } from "../utils/streamReadinessPolicy.ts";
 import { resolveAgentGoalPolicy } from "../utils/agentGoalPolicy.ts";
