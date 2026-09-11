@@ -406,9 +406,18 @@ function resolveTerminalConnectionStatus(
   status: number,
   result: { permanent?: boolean; creditsExhausted?: boolean },
   providerErrorType: string | null = null,
-  provider: string | null = null
+  provider: string | null = null,
+  isPerModelQuotaProvider = false
 ): string | null {
-  if (result.creditsExhausted || status === 402) return "credits_exhausted";
+  // #12242 (402 variant of #3027): a bare 402 on a passthrough/gateway
+  // provider multiplexing many upstreams behind one credential is a per-model
+  // billing signal — sibling models remain perfectly usable. Only terminalize
+  // the whole connection for a 402 when the provider is NOT a per-model-quota
+  // provider; the caller lets it fall through to the per-model lockout branch
+  // instead (#12875).
+  if (result.creditsExhausted || (status === 402 && !isPerModelQuotaProvider)) {
+    return "credits_exhausted";
+  }
   if (
     providerErrorType === PROVIDER_ERROR_TYPES.PROJECT_ROUTE_ERROR ||
     providerErrorType === PROVIDER_ERROR_TYPES.GEO_BLOCKED ||
@@ -2977,7 +2986,8 @@ export async function markAccountUnavailable(
       status,
       result as { permanent?: boolean; creditsExhausted?: boolean },
       providerErrorType,
-      provider
+      provider,
+      isPerModelQuotaProvider
     );
     const cachedQuotaResetAt =
       providerErrorType === PROVIDER_ERROR_TYPES.QUOTA_EXHAUSTED ||
@@ -2991,20 +3001,29 @@ export async function markAccountUnavailable(
         ? cachedQuotaResetMs - Date.now()
         : rawCooldownMs;
 
-    // ── #3027: per-model subscription/permission 403 → model-only lockout ──
+    // ── #3027 / #12242 (402 variant): per-model subscription (403) or
+    // per-model billing (402) error on a passthrough/gateway provider →
+    // model-only lockout, connection stays active. A 402 here is a specific
+    // model needing credit, not a dead credential — sibling (e.g. free)
+    // models on the same connection remain usable and must not be knocked
+    // out (#12875). Deliberately excludes single-credential providers, where
+    // a 402 genuinely does mean the key is out of credit (see #5239 /
+    // #10616) — isPerModelQuotaProvider is false there, so this branch never
+    // fires and the connection-wide credits_exhausted path above still applies.
     if (
       isPerModelQuotaProvider &&
-      status === 403 &&
+      (status === 403 || status === 402) &&
       provider &&
       model &&
       !terminalStatus &&
       !(provider === "vertex" && isVertexConnectionWidePermissionDenied(errorText))
     ) {
+      const lockoutReason = status === 402 ? "credits" : "forbidden";
       const lockout = recordModelLockoutFailure(
         provider,
         connectionId,
         model,
-        "forbidden",
+        lockoutReason,
         status,
         fallbackResult.baseCooldownMs ??
           effectiveProviderProfile?.baseCooldownMs ??
@@ -3018,14 +3037,17 @@ export async function markAccountUnavailable(
         }
       );
       updateProviderConnection(connectionId, {
-        lastErrorType: "forbidden",
-        lastError: `Model ${model} forbidden (per-model access/subscription)`,
+        lastErrorType: lockoutReason,
+        lastError:
+          status === 402
+            ? `Model ${model} out of credits (per-model billing)`
+            : `Model ${model} forbidden (per-model access/subscription)`,
         lastErrorAt: new Date().toISOString(),
         errorCode: status,
       }).catch(() => {});
       log.info(
         "AUTH",
-        `Model-only lockout for ${provider}:${model} — 403 forbidden ${Math.ceil(lockout.cooldownMs / 1000)}s (per-model quota provider, connection stays active)`
+        `Model-only lockout for ${provider}:${model} — ${status} ${lockoutReason} ${Math.ceil(lockout.cooldownMs / 1000)}s (per-model quota provider, connection stays active)`
       );
       return { shouldFallback: true, cooldownMs: lockout.cooldownMs };
     }

@@ -20,6 +20,7 @@ import { saveCallLog } from "@/lib/usageDb";
 import { shouldHideLogs } from "@/lib/tokenHealthCheck";
 import { logProxyEvent } from "@/lib/proxyLogger";
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
+import { lockModelIfPerModelQuota } from "@omniroute/open-sse/services/accountFallback.ts";
 import {
   buildGitLabDuoProbeBody,
   buildGitLabDuoProbeHeaders,
@@ -1122,6 +1123,16 @@ async function runConnectionTest(connectionId: string, validationModelId?: strin
       ...(psd || {}),
       apiKeyHealth: {},
     };
+
+    // A representative-model 402 on an openai-compatible / per-model-quota
+    // gateway must lock only that model (#12875). The connection stays
+    // selectable for sibling upstreams that still return 200.
+    const configuredModelId =
+      typeof psd?.validationModelId === "string" ? psd.validationModelId : "";
+    const probedModelId = validationModelId || configuredModelId;
+    if (result.statusCode === 402 && probedModelId) {
+      lockModelIfPerModelQuota(provider, connectionId, probedModelId, "credits", 60 * 60 * 1000);
+    }
 
     try {
       removeConnectionHealth(connectionId);

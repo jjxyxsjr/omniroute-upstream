@@ -6,9 +6,12 @@
  * handleChatCore. Translates an upstream HTTP status into the in-memory key-health state
  * (apiKeyRotator) for the connection's currently-selected key, and persists the change to the
  * provider connection so it survives process restarts:
- *   - 401 → record a failure (warning, then invalid at the threshold), always persisted.
- *   - 402 → terminal (insufficient balance); mark the current key invalid immediately (#5239),
- *           persisted on the active→invalid transition.
+ *   - genuine 401/403 credential rejection → record a failure (warning, then invalid at the
+ *     threshold), always persisted.
+ *   - 402 → terminal (insufficient balance) on single-credential providers; mark the
+ *           current key invalid immediately (#5239), persisted on the active→invalid
+ *           transition. openai-compatible / per-model-quota gateways keep the key —
+ *           a 402 there is a per-model billing signal, not a dead credential.
  *   - 2xx → record a success, persisted only when recovering from a warning/invalid state.
  * Any other status only refreshes the tracked extra-key set. The handler binds its `log` once and
  * delegates here, keeping the existing call sites unchanged.
@@ -21,6 +24,7 @@ import {
   trackConnectionExtraKeys,
   type KeyHealth,
 } from "../../services/apiKeyRotator.ts";
+import { hasPerModelQuota } from "../../services/accountFallback.ts";
 import { updateProviderConnection } from "@/lib/db/providers";
 
 type KeyHealthLog = {
@@ -80,11 +84,20 @@ export function recordKeyHealthStatus(
       });
     }
   } else if (status === 402) {
-    // 402 "Insufficient account balance" is terminal for this key — the balance
-    // won't recover mid-session, so mark the current key invalid immediately
-    // (don't wait for FAILURE_THRESHOLD) so the rotator stops returning it.
-    // The per-connection path already terminalizes 402 via credits_exhausted;
-    // this closes the per-KEY gap (#5239) for API Key Round-Robin connections.
+    // 402 "Insufficient account balance" is terminal for this key on
+    // single-credential providers — the balance won't recover mid-session
+    // (#5239). openai-compatible / per-model-quota gateways multiplex many
+    // upstreams behind one key: a 402 is a per-model billing signal and must
+    // not invalidate the credential used by sibling models (#12875).
+    const provider =
+      typeof creds.provider === "string"
+        ? creds.provider
+        : typeof connId === "string"
+          ? connId
+          : null;
+    if (hasPerModelQuota(provider)) {
+      return;
+    }
     const updatedHealth = recordKeyTerminal(connId, currentKeyId);
     log?.error?.(
       "AUTH",

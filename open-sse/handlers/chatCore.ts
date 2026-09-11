@@ -411,7 +411,7 @@ import {
   acquire as acquireAccountSemaphore,
   markBlocked as markAccountSemaphoreBlocked,
 } from "../services/accountSemaphore.ts";
-import { lockModel, lockModelIfPerModelQuota } from "../services/accountFallback.ts";
+import { lockModel, lockModelIfPerModelQuota, hasPerModelQuota } from "../services/accountFallback.ts";
 import { lockExactModel } from "../services/accountFallback.ts";
 import {
   generateSignature,
@@ -4224,6 +4224,18 @@ export async function handleChatCore({
             if (probeIsolated) {
               console.warn(
                 `[provider] Node ${errorConnectionId} probe ${errorType} (${statusCode}) — connection stays active`
+              );
+            } else if (hasPerModelQuota(provider, model)) {
+              // Compatible / passthrough gateways: a 402 without a model id
+              // still must not terminalize the whole connection. Record the
+              // error for operators; sibling models stay selectable (#12875).
+              await updateProviderConnection(errorConnectionId, {
+                lastErrorType: errorType,
+                lastError: message,
+                errorCode: statusCode,
+              });
+              console.warn(
+                `[provider] Node ${errorConnectionId} per-model quota exhausted (${statusCode}) — connection stays active`
               );
             } else {
               console.warn(
