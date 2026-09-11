@@ -49,15 +49,28 @@ export function recordLearnedMaxTokensCap(
  *    < 8192"                                              → 8191 (exclusive bound)
  * Only matches max_tokens errors (never thinking_budget / other params).
  * Returns null for anything else.
+ *
+ * nnd.24 ④ (2026-09-11 实测定案): Ark 的 JSON 序列化把 `<` 转义成 `\u003c`
+ * (实测 raw body: "expected a value \u003c= 131072")。反应块拿的是 clone().text()
+ * 的原始响应文本——不经过 JSON.parse——字面 `<=` 正则对转义形永不命中，导致
+ * 9-11 生产两笔 400 零钳制零学习静默穿透（复现容器用日志里的“已还原形”造假
+ * 上游全部误绿）。故匹配前先把 JSON 六进制转义还原再跑正则。
  */
 export function parseMaxTokensCeiling(errText: unknown): number | null {
   if (typeof errText !== "string" || !errText) return null;
-  const inclusive = /max_tokens[^\n]*?expected a value\s*<=\s*(\d+)/i.exec(errText);
+  // Unescape JSON \uXXXX forms of <, =, & so the literal regexes below can see
+  // them. Only these three appear in upstream validation messages in practice;
+  // anything else is left untouched.
+  const normalized = errText
+    .replace(/\\u003[cC]/g, "<")
+    .replace(/\\u003[dD]/g, "=")
+    .replace(/\\u0026/g, "&");
+  const inclusive = /max_tokens[^\n]*?expected a value\s*<=\s*(\d+)/i.exec(normalized);
   if (inclusive) {
     const max = Number(inclusive[1]);
     return Number.isFinite(max) && max > 0 ? max : null;
   }
-  const exclusive = /max_tokens[^\n]*?expected a value\s*<\s*(\d+)/i.exec(errText);
+  const exclusive = /max_tokens[^\n]*?expected a value\s*<\s*(\d+)/i.exec(normalized);
   if (exclusive) {
     const max = Number(exclusive[1]);
     if (Number.isFinite(max) && max > 1) return max - 1;

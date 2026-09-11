@@ -18,9 +18,15 @@ import test from "node:test";
 import { DefaultExecutor } from "../../open-sse/executors/default.ts";
 import {
   __test_resetLearnedMaxTokensCaps,
+  parseMaxTokensCeiling,
   recordLearnedMaxTokensCap,
 } from "../../open-sse/services/learnedMaxTokensCaps.ts";
 import { fitThinkingToMaxTokens } from "../../open-sse/translator/request/openai-to-claude/thinkingBudget.ts";
+
+// nnd.24 ④ 定案样本(2026-09-11 16:05 mitm 抓真 ark 原始响应字节,未 JSON.parse):
+// 注意 <= 在原始文本里是 \u003c= ——这正是生产零钳制的根因。
+const ARK_RAW_ESCAPED_BODY =
+  '{"error":{"code":"InvalidParameter","message":"The parameter `max_tokens` specified in the request is not valid: integer above maximum value, expected a value \\u003c= 131072, but got 139264 instead. Request id: 021789142702058234941bcf51f16e2fd5d0b33793bdac06aa75b","param":"max_tokens","type":"BadRequest"}}';
 
 const PROVIDER = "anthropic-compatible-d70a9997-f802-49b6-92fc-92a60a018fc2";
 const MODEL = "ark-code-latest";
@@ -124,6 +130,56 @@ test("nnd.24 ④ wiring: claude-shaped 178586 hit by ark 400 must clamp to 13107
   assert.equal(mock.calls.length, 2, `expect clamp-and-retry to fire (2 dispatches), got ${mock.calls.length}`);
   assert.equal(mock.calls[0].body.max_tokens, 178586, "first outbound should carry the composed 178586");
   assert.equal(mock.calls[1].body.max_tokens, 131072, "retry outbound must be clamped to the advertised ceiling");
+});
+
+test("nnd.24 ④ suppression root cause: raw ark body escapes `<=` as \\u003c= — parser must still find the ceiling", () => {
+  // 生产 9-11 两笔穿透的确切形态:反应块拿 clone().text() 原始字节,正则
+  // 匹配字面 <=,对 \u003c= 永不命中 → 零钳制零学习静默穿透。
+  assert.equal(
+    parseMaxTokensCeiling(ARK_RAW_ESCAPED_BODY),
+    131072,
+    "escaped \\u003c= form must parse (this was the production suppression)"
+  );
+  // 大写转义变体同样要吃。
+  assert.equal(
+    parseMaxTokensCeiling(
+      "max_tokens not valid, expected a value \\u003C 8192"
+    ),
+    8191,
+    "escaped exclusive form must parse as N-1"
+  );
+  // 非转义的原有形态不回归。
+  assert.equal(
+    parseMaxTokensCeiling(
+      "The parameter `max_tokens` ... expected a value <= 131072, but got 178586"
+    ),
+    131072
+  );
+});
+
+test("nnd.24 ④ wiring (raw escaped 400): executor clamps and retries on the true ark byte shape", async () => {
+  __test_resetLearnedMaxTokensCaps();
+  const raw400 = () =>
+    new Response(ARK_RAW_ESCAPED_BODY, {
+      status: 400,
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+    });
+  const mock = withFetchMock((i) => (i === 0 ? raw400() : OK_200()));
+  try {
+    const executor = new DefaultExecutor(PROVIDER);
+    await executor.execute({
+      model: MODEL,
+      body: claudeShapedBody(),
+      stream: true,
+      credentials: CREDENTIALS,
+    });
+  } catch {
+    // 同上,只看派发行为
+  } finally {
+    mock.restore();
+  }
+  assert.equal(mock.calls.length, 2, "raw escaped ark 400 must trigger clamp-and-retry");
+  assert.equal(mock.calls[1].body.max_tokens, 131072);
 });
 
 test("nnd.24 ④ composition: openai-shaped 8192 + thinking disabled — record outbound max_tokens (locator, not verdict)", async () => {
