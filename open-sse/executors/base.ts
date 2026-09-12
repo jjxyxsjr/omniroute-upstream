@@ -5,7 +5,7 @@ import {
   resolveDirectHeadersTimeoutMs,
   resolveNonStreamTotalBudgetMs,
 } from "../utils/directResponseStartTimeout.ts";
-import { STREAM_READINESS_MAX_TIMEOUT_MS } from "../utils/streamReadiness.ts";
+import { STREAM_READINESS_MAX_TIMEOUT_MS } from "../config/constants.ts";
 import {
   resolveAlternateFormat,
   type AlternateFormat,
