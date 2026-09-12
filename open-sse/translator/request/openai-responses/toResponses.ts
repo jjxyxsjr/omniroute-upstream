@@ -29,11 +29,15 @@ import {
 const DEFAULT_RESPONSES_REASONING_SUMMARY = "auto";
 const RESPONSES_REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content";
 
-// Chat Completions `response_format: { type: "json_schema" }` → Responses API `text.format`.
+// Chat Completions JSON `response_format` → Responses API `text.format`.
 // Merges into any existing `result.text` (e.g. verbosity) so structured-output schemas from
 // Chat clients survive the translation to the Responses/Codex upstream (#5933).
 function mapChatResponseFormatToResponsesText(body: JsonRecord, result: JsonRecord): void {
   const responseFormat = toRecord(body.response_format);
+  if (responseFormat.type === "json_object") {
+    result.text = { ...toRecord(result.text), format: { type: "json_object" } };
+    return;
+  }
   if (responseFormat.type !== "json_schema") return;
 
   const jsonSchema = toRecord(responseFormat.json_schema);
@@ -49,6 +53,20 @@ function mapChatResponseFormatToResponsesText(body: JsonRecord, result: JsonReco
   if (jsonSchema.strict !== undefined) format.strict = jsonSchema.strict;
 
   result.text = { ...existingText, format };
+}
+
+// Flatten a Chat-Completions content block into the single string the Responses
+// API `instructions` field takes. `instructions` is a string, not a part array,
+// so the text parts are joined; anything non-textual has no representation there
+// and is dropped, exactly as a string-only client would have sent it.
+function buildInstructionsText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  return buildResponsesTextParts(content)
+    .map((partValue) => toString(toRecord(partValue).text))
+    .filter((text) => text.length > 0)
+    .join("\n\n");
 }
 
 // Convert a Chat-Completions content block (string or text-part array) into the
@@ -109,7 +127,12 @@ export function openaiToOpenAIResponsesRequest(
 
     if (role === "system" || role === "developer") {
       if (!hasSystemMessage) {
-        result.instructions = typeof msg.content === "string" ? msg.content : "";
+        // A content-part array is valid Chat Completions for `system` too, and
+        // clients that cache their prompt (Anthropic `cache_control`) always
+        // send that shape. Reading only the string case turned the entire
+        // system prompt into "" — accepted upstream, so the model answered
+        // with no instructions at all and nothing in the response said so.
+        result.instructions = buildInstructionsText(msg.content);
         hasSystemMessage = true;
         continue;
       }
@@ -387,7 +410,9 @@ export function openaiToOpenAIResponsesRequest(
   // Translate max_tokens / max_completion_tokens → max_output_tokens for Responses API.
   // The Responses API does not accept max_tokens or max_completion_tokens; it requires
   // max_output_tokens. max_completion_tokens takes priority as the newer Chat Completions field.
-  if (root.max_completion_tokens !== undefined) {
+  if (root.max_output_tokens !== undefined) {
+    result.max_output_tokens = root.max_output_tokens;
+  } else if (root.max_completion_tokens !== undefined) {
     result.max_output_tokens = root.max_completion_tokens;
   } else if (root.max_tokens !== undefined) {
     result.max_output_tokens = root.max_tokens;

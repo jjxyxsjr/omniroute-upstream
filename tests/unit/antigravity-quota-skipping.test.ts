@@ -12,7 +12,7 @@ const quotaCache = await import("../../src/domain/quotaCache.ts");
 
 test.after(() => {
   coreDb.resetDbInstance();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 test("isQuotaExhaustedForRequest isolates Claude and Gemini quota families for antigravity & agy", () => {
@@ -151,5 +151,26 @@ test("isQuotaExhaustedForRequest treats near-zero remaining as exhausted at defa
     ),
     true,
     "effectively-zero remaining should count as exhausted"
+  );
+});
+
+test("isQuotaExhaustedForRequest does not skip Claude extra-usage connections", () => {
+  const connectionId = "conn-claude-extra-usage";
+  quotaCache.setQuotaCache(connectionId, "claude", {
+    "session (5h)": { remainingPercentage: 0, resetAt: null },
+  });
+
+  assert.equal(quotaCache.isQuotaExhaustedForRequest(connectionId, "claude"), true);
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(connectionId, "claude", null, { blockExtraUsage: true }),
+    true
+  );
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(connectionId, "claude", null, { blockExtraUsage: false }),
+    false
+  );
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(connectionId, "codex", null, { blockExtraUsage: false }),
+    true
   );
 });

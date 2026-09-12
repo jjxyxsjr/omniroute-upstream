@@ -4,6 +4,7 @@ import {
 } from "@omniroute/open-sse/services/codexAccount/index.ts";
 import type { AdaptiveAdmissionPublicSnapshot } from "@omniroute/open-sse/services/admission/runtime.ts";
 import type { PerConnectionAdmissionController } from "@/shared/middleware/chatBodyAdmission";
+import type { WalMaintenanceState } from "@/lib/db/walMaintenance";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -24,7 +25,44 @@ export type ChatAdmissionHealthSummary = {
   shedTotal: number;
   shedsByReason: Record<string, number>;
   lanes: Array<{ key: string; waiting: number }>;
+  /** #503-fanout: live ingest bytes reserved through the byte-budget gate. */
+  inflightBytes: number;
+  /** #503-fanout: the auto-derived (or overridden) budget ceiling. */
+  maxInflightBytes: number;
+  /** #503-fanout: which signal the budget was derived from. */
+  budgetSource: string;
+  /** #503-fanout: live multi-signal resource-pressure severity. */
+  pressureSeverity: string;
+  /** #503-fanout: false on a default deployment — proves the byte-budget
+   * gate, not the legacy request-count cap, is what is actually binding. */
+  countCapEnabled: boolean;
 };
+
+/**
+ * WAL maintenance health summary (#12853) — the periodic TRUNCATE lifecycle
+ * from walMaintenance.ts. Fixed low-cardinality shape, never raw-spread.
+ */
+export type WalMaintenanceSnapshot = Pick<
+  WalMaintenanceState,
+  "ticks" | "busyStreak" | "busyTotal" | "lastBusyAt" | "lastOkAt"
+>;
+
+/**
+ * Explicit allowlisted projection of the WAL maintenance state.
+ * Copies only the documented scalar fields — no timers, no internals.
+ */
+export function projectWalMaintenanceSummary(
+  state: WalMaintenanceState | null | undefined
+): WalMaintenanceSnapshot | null {
+  if (!state || typeof state !== "object") return null;
+  return {
+    ticks: state.ticks,
+    busyStreak: state.busyStreak,
+    busyTotal: state.busyTotal,
+    lastBusyAt: state.lastBusyAt,
+    lastOkAt: state.lastOkAt,
+  };
+}
 
 /**
  * Explicit allowlisted projection of the structural admission snapshot.
@@ -42,6 +80,11 @@ export function projectChatAdmissionSummary(
     shedTotal: snapshot.shedTotal,
     shedsByReason: { ...(snapshot.shedsByReason ?? {}) },
     lanes: (snapshot.lanes ?? []).map((lane) => ({ key: lane.key, waiting: lane.waiting })),
+    inflightBytes: snapshot.inflightBytes,
+    maxInflightBytes: snapshot.maxInflightBytes,
+    budgetSource: snapshot.budgetSource,
+    pressureSeverity: snapshot.pressureSeverity,
+    countCapEnabled: snapshot.countCapEnabled,
   };
 }
 
@@ -177,6 +220,7 @@ interface BuildHealthPayloadOptions {
     id?: string;
     provider?: string;
     isActive?: boolean | null;
+    testStatus?: string | null;
     rateLimitedUntil?: unknown;
     providerSpecificData?: Readonly<Record<string, unknown>> | null;
   }>;
@@ -196,15 +240,66 @@ interface BuildHealthPayloadOptions {
     failed: number;
     unknown: number;
     stale: number;
+    failedConnections?: Array<{
+      connectionId: string;
+      status: "error";
+      lastError?: string;
+      lastErrorType?: string;
+    }>;
+    failedOmitted?: number;
   };
   /** Optional injected public adaptive-admission snapshot; projected, never raw-spread. */
   adaptiveAdmission?: AdaptiveAdmissionPublicSnapshot | null;
   /** #11244: optional structural chat-admission snapshot; projected, never raw-spread. */
   chatAdmission?: ChatAdmissionSnapshot | null;
+  /** #12853: optional WAL maintenance snapshot; projected, never raw-spread. */
+  walMaintenance?: WalMaintenanceSnapshot | null;
 }
 
 function limitMonitors(monitors: QuotaMonitorSnapshot[], maxItems = 8): QuotaMonitorSnapshot[] {
   return monitors.slice(0, maxItems);
+}
+
+/**
+ * SQLite `test_status` values that stay sticky on active rows even when the
+ * in-memory probe-cache gauge reports failed=0 (expired / quota / banned).
+ */
+const STICKY_DB_NON_OK_TEST_STATUS = new Set([
+  "error",
+  "expired",
+  "credits_exhausted",
+  "banned",
+  "deactivated",
+  "unavailable",
+]);
+
+/**
+ * Count is_active=1 (or unset) rows whose persisted test_status is a known
+ * non-ok. This is a cheap SQLite-layer signal and is not the probe-cache
+ * `failed` gauge.
+ */
+export function countStaleDbNonOkConnections(
+  connections: BuildHealthPayloadOptions["connections"]
+): number {
+  let count = 0;
+  for (const connection of connections) {
+    if (connection.isActive === false) continue;
+    const status = (connection.testStatus ?? "").trim().toLowerCase();
+    if (STICKY_DB_NON_OK_TEST_STATUS.has(status)) count += 1;
+  }
+  return count;
+}
+
+function projectCredentialHealth(
+  credentialHealth: BuildHealthPayloadOptions["credentialHealth"],
+  connections: BuildHealthPayloadOptions["connections"]
+) {
+  if (!credentialHealth) return undefined;
+  return {
+    ...credentialHealth,
+    source: "probe-cache" as const,
+    staleDbNonOkCount: countStaleDbNonOkConnections(connections),
+  };
 }
 
 export function buildSessionsSummary({
@@ -389,6 +484,7 @@ export function buildHealthPayload({
   credentialHealth,
   adaptiveAdmission = null,
   chatAdmission = null,
+  walMaintenance = null,
   buildSha = null,
 }: BuildHealthPayloadOptions) {
   const timestamp = new Date().toISOString();
@@ -489,11 +585,14 @@ export function buildHealthPayload({
       monitors: limitMonitors(quotaMonitorMonitors),
     },
     sessions: buildSessionsSummary({ activeSessions, activeSessionsByKey }),
-    credentialHealth, // may be undefined if credentialHealth module not loaded
+    credentialHealth: projectCredentialHealth(credentialHealth, connections),
     adaptiveAdmission: projectAdaptiveAdmissionSummary(adaptiveAdmission),
     // #11244: the STRUCTURAL gate (chatBodyAdmission.ts) next to the adaptive one —
     // distinct key so clients reading `adaptiveAdmission` are untouched.
     chatAdmission: projectChatAdmissionSummary(chatAdmission),
+    // #12853: WAL maintenance next to the admission gates — additive key,
+    // nothing existing moves.
+    walMaintenance: projectWalMaintenanceSummary(walMaintenance),
     dedup: {
       inflightRequests,
     },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, Suspense } from "react";
 import { Card, CardSkeleton, Badge, Button, CollapsibleSection } from "@/shared/components";
 import {
   AGGREGATOR_PROVIDER_IDS,
@@ -54,9 +54,7 @@ const AddCompatibleProviderModal = dynamic(
 import { CategoryDot } from "./components/CategoryDot";
 const ImportProvidersFromFileModal = dynamic(
   () =>
-    import("./components/ImportProvidersFromFileModal").then(
-      (m) => m.ImportProvidersFromFileModal
-    ),
+    import("./components/ImportProvidersFromFileModal").then((m) => m.ImportProvidersFromFileModal),
   { ssr: false }
 );
 import NoAuthProvidersSection from "./components/NoAuthProvidersSection";
@@ -192,7 +190,28 @@ function getConnectionErrorTag(connection, t: ProviderMessageTranslator) {
   return "ERR";
 }
 
-export default function ProvidersPage() {
+// OAuth-env repair status fetch, extracted so the callback below only sets
+// state after the await (errors come back as `null` instead of a setState
+// inside the catch block, which the react-hooks compiler rules reject when the
+// callback is invoked from an effect).
+async function loadOauthEnvRepairStatus(): Promise<{
+  available: boolean;
+  missingCount: number;
+} | null> {
+  try {
+    const res = await fetch("/api/system/env/repair", { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok) return null;
+    return {
+      available: Boolean(data.available),
+      missingCount: Number(data.missingCount || 0),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function ProvidersPageContent() {
   const router = useRouter();
   const [connections, setConnections] = useState<any[]>([]);
   const [providerNodes, setProviderNodes] = useState<any[]>([]);
@@ -297,33 +316,30 @@ export default function ProvidersPage() {
     writeProviderDisplayModePreference(storedDisplayMode);
   }, [connections.length, displayModePreferenceReady, providerDisplayMode, loading]);
 
-  useEffect(() => {
-    if (!shouldSyncProviderDisplayMode(displayModePreferenceReady, loading)) return;
-    if (connections.length === 0 && providerDisplayMode === "configured") {
-      setProviderDisplayMode("all");
-    }
-  }, [connections.length, displayModePreferenceReady, providerDisplayMode, loading]);
+  // "No connections → fall back to the 'all' view" is a state adjustment
+  // derived from other state, applied during render (self-invalidating guard,
+  // converges in one extra pass) instead of a synchronous setState effect.
+  if (
+    shouldSyncProviderDisplayMode(displayModePreferenceReady, loading) &&
+    connections.length === 0 &&
+    providerDisplayMode === "configured"
+  ) {
+    setProviderDisplayMode("all");
+  }
 
   const fetchOauthEnvRepairStatus = useCallback(async () => {
-    try {
-      const res = await fetch("/api/system/env/repair", { cache: "no-store" });
-      const data = await res.json();
-      if (res.ok) {
-        setOauthEnvRepairStatus({
-          available: Boolean(data.available),
-          missingCount: Number(data.missingCount || 0),
-        });
-      } else {
-        setOauthEnvRepairStatus(null);
-      }
-    } catch {
-      setOauthEnvRepairStatus(null);
-    }
+    setOauthEnvRepairStatus(await loadOauthEnvRepairStatus());
   }, []);
 
+  // Inline-in-effect (calling the component-scope callback synchronously from
+  // an effect is rejected by the compiler rules); setState runs after the await.
   useEffect(() => {
-    void fetchOauthEnvRepairStatus();
-  }, [fetchOauthEnvRepairStatus]);
+    const run = async () => {
+      const status = await loadOauthEnvRepairStatus();
+      setOauthEnvRepairStatus(status);
+    };
+    void run();
+  }, []);
 
   const handleRepairEnv = async () => {
     if (!oauthEnvRepairStatus?.available || repairingEnv) return;
@@ -542,7 +558,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
 
   const rawNoAuthEntriesAll = buildStaticProviderEntries("no-auth", getProviderStats);
@@ -560,7 +577,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
 
   const apiKeyProviderEntriesAll = buildStaticProviderEntries("apikey", getProviderStats);
@@ -579,7 +597,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
   const aggregatorProviderEntriesAll = apiKeyProviderEntriesAll.filter((entry) =>
     AGGREGATOR_PROVIDER_IDS.has(entry.providerId)
@@ -591,7 +610,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
   const imageProviderEntriesAll = apiKeyProviderEntriesAll.filter((entry) =>
     IMAGE_ONLY_PROVIDER_IDS.has(entry.providerId)
@@ -603,7 +623,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
   const enterpriseProviderEntriesAll = apiKeyProviderEntriesAll.filter((entry) =>
     ENTERPRISE_CLOUD_PROVIDER_IDS.has(entry.providerId)
@@ -615,7 +636,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
   const videoProviderEntriesAll = apiKeyProviderEntriesAll.filter((entry) =>
     VIDEO_PROVIDER_IDS.has(entry.providerId)
@@ -627,7 +649,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
   const embeddingRerankProviderEntriesAll = apiKeyProviderEntriesAll.filter((entry) =>
     EMBEDDING_RERANK_PROVIDER_IDS.has(entry.providerId)
@@ -639,7 +662,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
 
   const webCookieProviderEntriesAll = buildStaticProviderEntries("web-cookie", getProviderStats);
@@ -650,7 +674,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
 
   const localProviderEntriesAll = buildStaticProviderEntries("local", getProviderStats);
@@ -661,7 +686,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
 
   const searchProviderEntriesAll = buildStaticProviderEntries("search", getProviderStats);
@@ -672,7 +698,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
 
   const audioProviderEntriesAll = buildStaticProviderEntries("audio", getProviderStats);
@@ -683,7 +710,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
 
   const cloudAgentProviderEntriesAll = buildStaticProviderEntries("cloud-agent", getProviderStats);
@@ -694,7 +722,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
 
   const upstreamProxyEntriesAll = buildStaticProviderEntries("upstream-proxy", getProviderStats);
@@ -705,7 +734,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
 
   const compatibleProviderEntriesAll = [
@@ -738,7 +768,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
 
   const staticProviderEntriesAll = dedupeProviderEntries([
@@ -764,7 +795,8 @@ export default function ProvidersPage() {
     undefined,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
 
   // IDE providers: subset of oauth/apikey providers that are editors/IDEs with
@@ -780,7 +812,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
 
   const oauthOnlyEntriesAll = oauthProviderEntriesAll
@@ -801,7 +834,8 @@ export default function ProvidersPage() {
     showFreeOnly,
     modelSearchQuery,
     activeServiceKind,
-    liveModelsByProviderId
+    liveModelsByProviderId,
+    connections
   );
 
   const compactProviderEntries = buildCompactProviderEntriesForPage({
@@ -1876,6 +1910,14 @@ export default function ProvidersPage() {
         )}
       </div>
     </OpenRouterProviderStatsProvider>
+  );
+}
+
+export default function ProvidersPage() {
+  return (
+    <Suspense fallback={null}>
+      <ProvidersPageContent />
+    </Suspense>
   );
 }
 

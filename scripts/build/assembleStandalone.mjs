@@ -49,6 +49,7 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import { colocateLlmlinguaOptionals, SEED_PACKAGES } from "./colocateOptionals.mjs";
+import { WREQ_JS_NATIVE_BINDINGS } from "./wreqJsNative.mjs";
 
 /**
  * Check whether a path exists (async).
@@ -120,6 +121,31 @@ const EXTRA_MODULE_ENTRIES = [
     label: "wreq-js TLS runtime",
     src: ["node_modules", "wreq-js"],
     dest: ["node_modules", "wreq-js"],
+  },
+  ...WREQ_JS_NATIVE_BINDINGS.map((binding) => ({
+    label: `${binding.packageName} native binding`,
+    src: ["node_modules", ...binding.packageName.split("/")],
+    dest: ["node_modules", ...binding.packageName.split("/")],
+  })),
+  {
+    label: "third-party notices",
+    src: ["THIRD_PARTY_NOTICES.md"],
+    dest: ["THIRD_PARTY_NOTICES.md"],
+  },
+  {
+    label: "wreq-js native provenance manifest",
+    src: ["config", "release", "wreq-js-native-manifest.json"],
+    dest: ["config", "release", "wreq-js-native-manifest.json"],
+  },
+  {
+    label: "wreq-js Rust license inventory",
+    src: ["config", "release", "wreq-js-rust-license-inventory.json"],
+    dest: ["config", "release", "wreq-js-rust-license-inventory.json"],
+  },
+  {
+    label: "wreq-js Rust/native notice bundle",
+    src: ["config", "release", "wreq-js-rust-notices.md"],
+    dest: ["config", "release", "wreq-js-rust-notices.md"],
   },
   {
     label: "@swc/helpers",
@@ -540,7 +566,30 @@ function copyStaticAndPublic({ distDir, relDistDir, projectRoot, resolvedOutDir 
   const publicSrc = path.join(projectRoot, "public");
   if (fsSync.existsSync(publicSrc)) {
     fsSync.cpSync(publicSrc, path.join(resolvedOutDir, "public"), { recursive: true, force: true });
+    stampServiceWorkerBuildId(resolvedOutDir);
   }
+}
+
+/**
+ * The service-worker update algorithm compares the BYTES of the fetched worker
+ * script against the installed worker; a changed query string only busts the
+ * HTTP cache, it does not make the browser install a new generation. So a
+ * build identifier has to be part of the sw.js bytes themselves. Stamp
+ * NEXT_PUBLIC_SW_BUILD_ID (same resolution chain as next.config.mjs) into the
+ * copied sw.js as a comment + CACHE_NAME suffix; the source file in public/
+ * stays generic for dev.
+ */
+function stampServiceWorkerBuildId(resolvedOutDir) {
+  const swDest = path.join(resolvedOutDir, "public", "sw.js");
+  if (!fsSync.existsSync(swDest)) return;
+  const buildId =
+    process.env.OMNIROUTE_SW_BUILD_ID || process.env.SOURCE_VERSION || String(Date.now());
+  let sw = fsSync.readFileSync(swDest, "utf8");
+  sw = sw.replace(
+    /^const CACHE_NAME = "omniroute-pwa-v3";$/m,
+    `const CACHE_NAME = "omniroute-pwa-v3-${buildId}"; // build ${buildId}`
+  );
+  fsSync.writeFileSync(swDest, sw);
 }
 
 /**

@@ -1,14 +1,14 @@
 ---
 title: "API Reference"
-version: 3.8.50
-lastUpdated: 2026-08-18
+version: 3.8.51
+lastUpdated: 2026-08-31
 ---
 
 # API Reference
 
-🌐 **Languages:** 🇺🇸 [English](./API_REFERENCE.md) | 🇧🇷 [Português (Brasil)](../i18n/pt-BR/docs/reference/API_REFERENCE.md) | 🇪🇸 [Español](../i18n/es/docs/reference/API_REFERENCE.md) | 🇫🇷 [Français](../i18n/fr/docs/reference/API_REFERENCE.md) | 🇮🇹 [Italiano](../i18n/it/docs/reference/API_REFERENCE.md) | 🇷🇺 [Русский](../i18n/ru/docs/reference/API_REFERENCE.md) | 🇨🇳 [中文 (简体)](../i18n/zh-CN/docs/reference/API_REFERENCE.md) | 🇩🇪 [Deutsch](../i18n/de/docs/reference/API_REFERENCE.md) | 🇮🇳 [हिन्दी](../i18n/in/docs/reference/API_REFERENCE.md) | 🇹🇭 [ไทย](../i18n/th/docs/reference/API_REFERENCE.md) | 🇺🇦 [Українська](../i18n/uk-UA/docs/reference/API_REFERENCE.md) | 🇸🇦 [العربية](../i18n/ar/docs/reference/API_REFERENCE.md) | 🇯🇵 [日本語](../i18n/ja/docs/reference/API_REFERENCE.md) | 🇻🇳 [Tiếng Việt](../i18n/vi/docs/reference/API_REFERENCE.md) | 🇧🇬 [Български](../i18n/bg/docs/reference/API_REFERENCE.md) | 🇩🇰 [Dansk](../i18n/da/docs/reference/API_REFERENCE.md) | 🇫🇮 [Suomi](../i18n/fi/docs/reference/API_REFERENCE.md) | 🇮🇱 [עברית](../i18n/he/docs/reference/API_REFERENCE.md) | 🇭🇺 [Magyar](../i18n/hu/docs/reference/API_REFERENCE.md) | 🇮🇩 [Bahasa Indonesia](../i18n/id/docs/reference/API_REFERENCE.md) | 🇰🇷 [한국어](../i18n/ko/docs/reference/API_REFERENCE.md) | 🇲🇾 [Bahasa Melayu](../i18n/ms/docs/reference/API_REFERENCE.md) | 🇳🇱 [Nederlands](../i18n/nl/docs/reference/API_REFERENCE.md) | 🇳🇴 [Norsk](../i18n/no/docs/reference/API_REFERENCE.md) | 🇵🇹 [Português (Portugal)](../i18n/pt/docs/reference/API_REFERENCE.md) | 🇷🇴 [Română](../i18n/ro/docs/reference/API_REFERENCE.md) | 🇵🇱 [Polski](../i18n/pl/docs/reference/API_REFERENCE.md) | 🇸🇰 [Slovenčina](../i18n/sk/docs/reference/API_REFERENCE.md) | 🇸🇪 [Svenska](../i18n/sv/docs/reference/API_REFERENCE.md) | 🇵🇭 [Filipino](../i18n/phi/docs/reference/API_REFERENCE.md) | 🇨🇿 [Čeština](../i18n/cs/docs/reference/API_REFERENCE.md)
+🌐 **Languages:** 🇺🇸 [English](./API_REFERENCE.md) | 🇸🇦 [العربية](../i18n/ar/docs/reference/API_REFERENCE.md) | 🇦🇿 [Azərbaycan dili](../i18n/az/docs/reference/API_REFERENCE.md) | 🇧🇬 [Български](../i18n/bg/docs/reference/API_REFERENCE.md) | 🇧🇩 [বাংলা](../i18n/bn/docs/reference/API_REFERENCE.md) | 🇨🇿 [Čeština](../i18n/cs/docs/reference/API_REFERENCE.md) | 🇩🇰 [Dansk](../i18n/da/docs/reference/API_REFERENCE.md) | 🇩🇪 [Deutsch](../i18n/de/docs/reference/API_REFERENCE.md) | 🇬🇷 [Ελληνικά](../i18n/el/docs/reference/API_REFERENCE.md) | 🇪🇸 [Español](../i18n/es/docs/reference/API_REFERENCE.md) | 🇪🇪 [Eesti](../i18n/et/docs/reference/API_REFERENCE.md) | 🇮🇷 [فارسی](../i18n/fa/docs/reference/API_REFERENCE.md) | 🇫🇮 [Suomi](../i18n/fi/docs/reference/API_REFERENCE.md) | 🇫🇷 [Français](../i18n/fr/docs/reference/API_REFERENCE.md) | 🇮🇪 [Gaeilge](../i18n/ga/docs/reference/API_REFERENCE.md) | 🇮🇳 [ગુજરાતી](../i18n/gu/docs/reference/API_REFERENCE.md) | 🇮🇱 [עברית](../i18n/he/docs/reference/API_REFERENCE.md) | 🇮🇳 [हिन्दी](../i18n/hi/docs/reference/API_REFERENCE.md) | 🇭🇷 [Hrvatski](../i18n/hr/docs/reference/API_REFERENCE.md) | 🇭🇺 [Magyar](../i18n/hu/docs/reference/API_REFERENCE.md) | 🇮🇩 [Bahasa Indonesia](../i18n/id/docs/reference/API_REFERENCE.md) | 🇮🇹 [Italiano](../i18n/it/docs/reference/API_REFERENCE.md) | 🇯🇵 [日本語](../i18n/ja/docs/reference/API_REFERENCE.md) | 🇰🇷 [한국어](../i18n/ko/docs/reference/API_REFERENCE.md) | 🇱🇹 [Lietuvių](../i18n/lt/docs/reference/API_REFERENCE.md) | 🇱🇻 [Latviešu](../i18n/lv/docs/reference/API_REFERENCE.md) | 🇮🇳 [मराठी](../i18n/mr/docs/reference/API_REFERENCE.md) | 🇲🇾 [Bahasa Melayu](../i18n/ms/docs/reference/API_REFERENCE.md) | 🇲🇹 [Malti](../i18n/mt/docs/reference/API_REFERENCE.md) | 🇳🇱 [Nederlands](../i18n/nl/docs/reference/API_REFERENCE.md) | 🇳🇴 [Norsk](../i18n/no/docs/reference/API_REFERENCE.md) | 🇵🇭 [Filipino](../i18n/phi/docs/reference/API_REFERENCE.md) | 🇵🇱 [Polski](../i18n/pl/docs/reference/API_REFERENCE.md) | 🇵🇹 [Português (Portugal)](../i18n/pt/docs/reference/API_REFERENCE.md) | 🇧🇷 [Português (Brasil)](../i18n/pt-BR/docs/reference/API_REFERENCE.md) | 🇷🇴 [Română](../i18n/ro/docs/reference/API_REFERENCE.md) | 🇷🇺 [Русский](../i18n/ru/docs/reference/API_REFERENCE.md) | 🇸🇰 [Slovenčina](../i18n/sk/docs/reference/API_REFERENCE.md) | 🇸🇮 [Slovenščina](../i18n/sl/docs/reference/API_REFERENCE.md) | 🇷🇸 [Српски](../i18n/sr/docs/reference/API_REFERENCE.md) | 🇸🇪 [Svenska](../i18n/sv/docs/reference/API_REFERENCE.md) | 🇰🇪 [Kiswahili](../i18n/sw/docs/reference/API_REFERENCE.md) | 🇮🇳 [தமிழ்](../i18n/ta/docs/reference/API_REFERENCE.md) | 🇮🇳 [తెలుగు](../i18n/te/docs/reference/API_REFERENCE.md) | 🇹🇭 [ไทย](../i18n/th/docs/reference/API_REFERENCE.md) | 🇹🇷 [Türkçe](../i18n/tr/docs/reference/API_REFERENCE.md) | 🇺🇦 [Українська](../i18n/uk-UA/docs/reference/API_REFERENCE.md) | 🇵🇰 [اردو](../i18n/ur/docs/reference/API_REFERENCE.md) | 🇻🇳 [Tiếng Việt](../i18n/vi/docs/reference/API_REFERENCE.md) | 🇨🇳 [中文 (简体)](../i18n/zh-CN/docs/reference/API_REFERENCE.md) | 🇹🇼 [中文 (繁體)](../i18n/zh-TW/docs/reference/API_REFERENCE.md)
 
-Complete reference for all OmniRoute API endpoints.
+Core reference for the OmniRoute API. It covers the public `/v1` surface and the most-used management endpoints; the machine-readable [`docs/openapi.yaml`](../openapi.yaml) and the route tree under `src/app/api/` are the exhaustive sources.
 
 ---
 
@@ -107,9 +107,9 @@ X-OmniRoute-Lease-Owner: vlo_<43-base64url-characters>
 {"action":"acquire","model":"glm/glm-4.6"}
 ```
 
-Successful lifecycle responses expose timestamps, `state`, and the exact positive `generation`,
-but never the selected connection or credentials. Renew and release supply the generation in the
-JSON body:
+Successful acquire, renew, and release responses expose timestamps, `state`, and the exact positive
+`generation`, but never the selected connection or credentials. Renew and release supply the
+generation in the JSON body:
 
 ```json
 { "action": "renew", "generation": 1 }
@@ -118,6 +118,44 @@ JSON body:
 ```json
 { "action": "release", "generation": 1, "reason": "OWNER_EXIT" }
 ```
+
+An active lease owner can explicitly request privacy-safe display metadata for its current binding:
+
+```json
+{ "action": "status", "generation": 1 }
+```
+
+```json
+{
+  "state": "ACTIVE",
+  "generation": 1,
+  "acquiredAt": "2026-08-28T12:00:00.000Z",
+  "renewedAt": "2026-08-28T12:00:30.000Z",
+  "expiresAt": "2026-08-28T12:02:30.000Z",
+  "connection": {
+    "displayName": "Primary Codex",
+    "provider": "codex"
+  }
+}
+```
+
+This opt-in status action is fenced by the opaque owner, authenticated managed API key, and exact
+active generation in one database transaction. `displayName` is only the trimmed configured
+connection name; it is `null` when no safe configured name exists. OmniRoute never substitutes an
+email or generated account identity. The provider value is a non-sensitive display label and never
+a generated compatible-provider identifier. Credentials, tokens, cookies, raw connection or API
+key ids, owner hashes, fencing secrets, and internal routing data are excluded.
+
+Wrong-key, wrong-owner, stale-generation, missing, expired, released, and invalidated lookups all
+return the same `409 LEASE_FENCE_STALE` error without connection metadata. A client that received the capacity-wait response has no active binding to inspect. When routing transitions an active lease,
+the same generation remains valid and status atomically returns the new binding, never the old one.
+Existing clients remain unchanged because acquire, renew, release, and waiting responses retain
+their previous shapes.
+
+This server contract does not change stock OpenAI Codex `/status`. Stock Codex currently reports its
+model provider and built-in authentication/account state but does not render arbitrary custom
+provider account metadata; a later client integration must call this action and decide how to
+display `connection.displayName`.
 
 Every managed inference request then supplies both control headers:
 
@@ -367,11 +405,11 @@ GET /v1/models?prefix=dual         # both forms (server default)
 GET /v1/models?prefix=canonical    # only the full provider-id prefix
 ```
 
-| Mode        | Emits                                                     | Notes                                                                                                                                                                                                     |
-| ----------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dual`      | `cc/claude-sonnet-4-6` **and** `claude/claude-sonnet-4-6` | **Default.** Both ids route to the same model; kept so client configs that hardcoded either form keep working. Roughly doubles the catalog.                                                               |
-| `alias`     | `cc/claude-sonnet-4-6`                                    | One entry per model. Providers without a distinct alias still emit their entry, so nothing is lost.                                                                                                       |
-| `canonical` | `claude/claude-sonnet-4-6`                                | ⚠️ The canonical row is only emitted when the canonical provider id **differs** from the alias, so providers without a distinct alias emit nothing in this mode. Prefer `alias` for a de-duplicated list. |
+| Mode        | Emits                                                     | Notes                                                                                                                                                                        |
+| ----------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dual`      | `cc/claude-sonnet-4-6` **and** `claude/claude-sonnet-4-6` | **Default.** Both ids route to the same model; kept so client configs that hardcoded either form keep working. Roughly doubles the catalog.                                  |
+| `alias`     | `cc/claude-sonnet-4-6`                                    | One entry per model. Providers without a distinct alias still emit their entry, so nothing is lost.                                                                          |
+| `canonical` | `claude/claude-sonnet-4-6`                                | One entry per model under the full provider-id prefix. Providers without a distinct alias (e.g. `antigravity/…`, `agy/…`) emit their single id here too, so nothing is lost. |
 
 A `dual`-mode mirror can also be recognised without the query parameter: it carries a `parent`
 field pointing at the primary id.
@@ -529,7 +567,7 @@ Web/search provider abstraction (Tavily, Brave, Exa, Serper, etc.).
 ## Web Fetch API
 
 Extract content from a URL via a configured web-fetch provider (Firecrawl, Jina
-Reader, Tavily Extract, TinyFish Fetch).
+Reader, Tavily Extract, TinyFish Fetch, Nimble Extract).
 
 | Method | Path            | Description                                               |
 | ------ | --------------- | --------------------------------------------------------- |
@@ -538,7 +576,8 @@ Reader, Tavily Extract, TinyFish Fetch).
 **Auth:** Bearer API key (`extractApiKey` + `isValidApiKey`). Policy enforced via `enforceApiKeyPolicy`.
 
 **Quota-aware fallback (#8297):** when no explicit `provider` is given, the pool
-(`firecrawl` → `jina-reader` → `tavily-search` → `tinyfish`) is walked in fixed
+(`firecrawl` → `jina-reader` → `tavily-search` → `tinyfish` → `nimble-search`) is
+walked in fixed
 priority order (fill-first) — a rate-limited-but-configured provider is skipped
 instead of short-circuiting the request, and a retryable/quota upstream failure
 (HTTP 429 always; 402/403 for Firecrawl/Tavily/TinyFish quota-style free tiers —
@@ -661,11 +700,21 @@ refusal. On success:
 {
   "allowed": true,
   // present only when the key opted into per-key usage limits (daily/weekly USD):
-  "personal": { "dailySpentUsd": 1.25, "dailyLimitUsd": 5, "dailyResetAtIso": "…", "weeklySpentUsd": 8, "weeklyLimitUsd": 20, "weeklyResetAtIso": "…" /* … */ },
+  "personal": {
+    "dailySpentUsd": 1.25,
+    "dailyLimitUsd": 5,
+    "dailyResetAtIso": "…",
+    "weeklySpentUsd": 8,
+    "weeklyLimitUsd": 20,
+    "weeklyResetAtIso": "…" /* … */,
+  },
   // the selected provider quota snapshot, or null when nothing is cached yet:
-  "provider": { "connectionId": "…", "provider": "claude", "plan": "…", "quotas": { /* … */ } },
+  "provider": { "connectionId": "…", "provider": "claude", "plan": "…", "quotas": {/* … */} },
   // every connection's snapshot, so a UI can render several providers side by side:
-  "providers": [ { "connectionId": "…", "provider": "claude", /* … */ }, { "provider": "codex", /* … */ } ]
+  "providers": [
+    { "connectionId": "…", "provider": "claude" /* … */ },
+    { "provider": "codex" /* … */ },
+  ],
 }
 ```
 
@@ -674,7 +723,7 @@ On refusal (`401` bad key / `403` not allowed) the same route returns
 (key allowed, nothing learned yet) is a different state from a refusal, and only the JSON form
 distinguishes them.
 
-**Auth:** the caller's own Bearer API key, validated with `isValidApiKey` — this is *not* the
+**Auth:** the caller's own Bearer API key, validated with `isValidApiKey` — this is _not_ the
 management surface (`/api/keys/…`), which stays behind `requireManagementAuth`.
 
 ---
@@ -832,15 +881,15 @@ ordinary inference API keys. Credential families, scopes, and curl examples:
 
 ### Monitoring
 
-| Endpoint                             | Method     | Description                                                                                                                                                                                       |
-| ------------------------------------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/api/sessions`                      | GET        | Active session tracking                                                                                                                                                                           |
-| `/api/rate-limits`                   | GET        | Per-account rate limits                                                                                                                                                                           |
-| `/api/monitoring/health`             | GET        | Health check + provider summary (`catalogCount`, `configuredCount`, `activeCount`, `monitoredCount`)                                                                                              |
-| `/api/cache/stats`                   | GET/DELETE | Cache stats / clear                                                                                                                                                                               |
-| `/api/modality-bridge/stats`         | GET        | In-memory `attempts`, successes/`bridged`, failures, cache hits, `totalLatencyMs`, `latencySamples`, sample-denominated `averageLatencyMs`, and last-use time (reset on restart; management auth) |
-| `/api/modality-bridge/video/runtime` | GET        | Strict trusted-loopback check before management auth/probe; sanitized FFmpeg/ffprobe availability and versions (no-store)                                                                         |
-| `/api/modality-bridge/video/extract` | POST       | Internal authenticated trusted-loopback byte broker; 50 MiB input, bounded queue/32 MiB output, `503` capacity, `499` disconnect, `504` deadline; not a public upload API                         |
+| Endpoint                             | Method     | Description                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/api/sessions`                      | GET        | Active session tracking                                                                                                                                                                                                                                                                                                                                                                      |
+| `/api/rate-limits`                   | GET        | Per-account rate limits                                                                                                                                                                                                                                                                                                                                                                      |
+| `/api/monitoring/health`             | GET        | Health check + provider summary (`catalogCount`, `configuredCount`, `activeCount`, `monitoredCount`). Management view includes `credentialHealth`: probe-cache scalars, `failedConnections` when `failed>0`, and `staleDbNonOkCount` (SQLite sticky `test_status`, not the gauge). See [MONITORING_GUIDE.md](../ops/MONITORING_GUIDE.md#credentialhealth-probe-cache-vs-sqlite-test_status). |
+| `/api/cache/stats`                   | GET/DELETE | Cache stats / clear                                                                                                                                                                                                                                                                                                                                                                          |
+| `/api/modality-bridge/stats`         | GET        | In-memory `attempts`, successes/`bridged`, failures, cache hits, `totalLatencyMs`, `latencySamples`, sample-denominated `averageLatencyMs`, and last-use time (reset on restart; management auth)                                                                                                                                                                                            |
+| `/api/modality-bridge/video/runtime` | GET        | Strict trusted-loopback check before management auth/probe; sanitized FFmpeg/ffprobe availability and versions (no-store)                                                                                                                                                                                                                                                                    |
+| `/api/modality-bridge/video/extract` | POST       | Internal authenticated trusted-loopback byte broker; 50 MiB input, bounded queue/32 MiB output, `503` capacity, `499` disconnect, `504` deadline; not a public upload API                                                                                                                                                                                                                    |
 
 ### Backup & Export/Import
 
@@ -1564,11 +1613,11 @@ devin-cli, etc.). See [Provider Reference](./PROVIDER_REFERENCE.md) for the full
 | Method | Path                                    | Description                                                                                                                                       |
 | ------ | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | GET    | `/api/cli-tools/all-statuses`           | Status of all CLI tools (installed, version, last seen)                                                                                           |
-| GET    | `/api/cli-tools/[id]/status`            | Status of a specific CLI tool (id can be: antigravity, chipotle, commandCode, devin-cli, etc.)                                                    |
+| GET    | `/api/cli-tools/status`                 | Status detail for one CLI tool (`?tool=` query)                                                                                                   |
 | POST   | `/api/cli-tools/apply`                  | Write a tool's generated config (`dryRun` previews; `422` + `containerEphemeralTarget` when containerized; `migration` notes a legacy Codex YAML) |
 | GET    | `/api/cli-tools/backups`                | List CLI tool configuration backups                                                                                                               |
 | POST   | `/api/cli-tools/backups`                | Create a backup of all CLI tool configurations                                                                                                    |
-| POST   | `/api/cli-tools/[id]/restore`           | Restore a CLI tool from a backup                                                                                                                  |
+| POST   | `/api/cli-tools/backups`                | Restore: same endpoint with `{tool, backupId}` in the body restores that backup                                                                   |
 | GET    | `/api/cli-tools/antigravity-mitm`       | Antigravity MITM proxy status (the "antigravity-mitm" CLI tool)                                                                                   |
 | POST   | `/api/cli-tools/antigravity-mitm/alias` | Configure antigravity-mitm aliases                                                                                                                |
 
@@ -1615,16 +1664,14 @@ Manage the semantic cache and reasoning cache.
 
 Manage persistent memory (FTS5 + vector embeddings).
 
-| Method | Path                 | Description                                                           |
-| ------ | -------------------- | --------------------------------------------------------------------- |
-| GET    | `/api/memory`        | List memory entries (filter by scope, type, search query)             |
-| POST   | `/api/memory`        | Create a new memory entry — body: `{scope, type, content, metadata?}` |
-| GET    | `/api/memory/[id]`   | Get a specific memory entry                                           |
-| PUT    | `/api/memory/[id]`   | Update a memory entry                                                 |
-| DELETE | `/api/memory/[id]`   | Delete a memory entry                                                 |
-| GET    | `/api/memory/search` | Search memory (FTS5 + vector)                                         |
-| POST   | `/api/memory/clear`  | Clear memory entries (with filters)                                   |
-| GET    | `/api/memory/stats`  | Memory statistics (total entries, embedding coverage, etc.)           |
+| Method | Path               | Description                                                             |
+| ------ | ------------------ | ----------------------------------------------------------------------- |
+| GET    | `/api/memory`      | List memory entries (filter by scope, type, search query)               |
+| POST   | `/api/memory`      | Create a new memory entry — body: `{scope, type, content, metadata?}`   |
+| GET    | `/api/memory/[id]` | Get a specific memory entry                                             |
+| PUT    | `/api/memory/[id]` | Update a memory entry                                                   |
+| DELETE | `/api/memory/[id]` | Delete a memory entry                                                   |
+| GET    | `/api/memory?q=`   | Search memory (FTS5 + vector) — stats are included in the same response |
 
 **Auth:** Requires management session or management-scoped API key.
 
@@ -1641,7 +1688,6 @@ Manage webhook subscriptions for events.
 | GET    | `/api/webhooks/[id]`            | Get a specific webhook subscription                                       |
 | PUT    | `/api/webhooks/[id]`            | Update a webhook subscription                                             |
 | DELETE | `/api/webhooks/[id]`            | Delete a webhook subscription                                             |
-| GET    | `/api/webhooks/events`          | List all available webhook event types                                    |
 | GET    | `/api/webhooks/[id]/deliveries` | List delivery history for a webhook (success/failure log)                 |
 | POST   | `/api/webhooks/[id]/test`       | Send a test event to a webhook                                            |
 
@@ -1674,15 +1720,15 @@ See [Skills Framework](../frameworks/SKILLS.md) for full details.
 
 Manage OmniRoute plugins (third-party extensions).
 
-| Method | Path                             | Description                               |
-| ------ | -------------------------------- | ----------------------------------------- |
-| GET    | `/api/plugins`                   | List installed plugins                    |
-| POST   | `/api/plugins/install`           | Install a plugin from a local path or URL |
-| DELETE | `/api/plugins/[name]`            | Uninstall a plugin                        |
-| POST   | `/api/plugins/[name]/activate`   | Activate a plugin                         |
-| POST   | `/api/plugins/[name]/deactivate` | Deactivate a plugin                       |
-| GET    | `/api/plugins/[name]/config`     | Get plugin configuration                  |
-| PUT    | `/api/plugins/[name]/config`     | Update plugin configuration               |
+| Method | Path                               | Description                           |
+| ------ | ---------------------------------- | ------------------------------------- |
+| GET    | `/api/plugins`                     | List installed plugins                |
+| POST   | `/api/plugins/marketplace/install` | Install a plugin from the marketplace |
+| DELETE | `/api/plugins/[name]`              | Uninstall a plugin                    |
+| POST   | `/api/plugins/[name]/activate`     | Activate a plugin                     |
+| POST   | `/api/plugins/[name]/deactivate`   | Deactivate a plugin                   |
+| GET    | `/api/plugins/[name]/config`       | Get plugin configuration              |
+| PUT    | `/api/plugins/[name]/config`       | Update plugin configuration           |
 
 **Auth:** Requires management session.
 

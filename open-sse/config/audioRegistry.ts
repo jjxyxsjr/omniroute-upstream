@@ -544,31 +544,6 @@ export const AUDIO_SPEECH_PROVIDERS: Record<string, AudioProvider> = {
     ],
   },
 
-  edgetts: {
-    id: "edgetts",
-    // Microsoft Edge "Read Aloud" — reverse-engineered, no API key required.
-    // WebSocket transport (unlike every other entry here) — handled by
-    // open-sse/executors/edgeTts.ts, dispatched via the "edgetts" format.
-    baseUrl: "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1",
-    authType: "none",
-    authHeader: "none",
-    format: "edgetts",
-    supportedFormats: ["mp3"],
-    models: [
-      { id: "en-US-AriaNeural", name: "Aria (EN-US, Female)" },
-      { id: "en-US-GuyNeural", name: "Guy (EN-US, Male)" },
-      { id: "en-GB-SoniaNeural", name: "Sonia (EN-GB, Female)" },
-      { id: "en-GB-RyanNeural", name: "Ryan (EN-GB, Male)" },
-      { id: "es-ES-ElviraNeural", name: "Elvira (ES-ES, Female)" },
-      { id: "pt-BR-FranciscaNeural", name: "Francisca (PT-BR, Female)" },
-      { id: "pt-BR-AntonioNeural", name: "Antonio (PT-BR, Male)" },
-      { id: "fr-FR-DeniseNeural", name: "Denise (FR-FR, Female)" },
-      { id: "de-DE-KatjaNeural", name: "Katja (DE-DE, Female)" },
-      { id: "ja-JP-NanamiNeural", name: "Nanami (JA-JP, Female)" },
-      { id: "zh-CN-XiaoxiaoNeural", name: "Xiaoxiao (ZH-CN, Female)" },
-    ],
-  },
-
   gtts: {
     id: "gtts",
     // Google Translate TTS — reverse-engineered, no API key required.
@@ -606,6 +581,20 @@ export const AUDIO_SPEECH_PROVIDERS: Record<string, AudioProvider> = {
       { id: "tts-1-hd", name: "TTS 1 HD" },
       { id: "tts-1", name: "TTS 1" },
     ],
+  },
+
+  // UC (uncensored.com) voice synthesis over its dedicated TTS WebSocket. Auth is
+  // a Clerk session JWT minted per-connect from the durable connection cred; the
+  // `format: "uc-tts"` branch in audioSpeech.ts drives the socket. The baseUrl is
+  // a synthetic marker (the real transport is wss://tts-stream.chatuncensored.ai)
+  // and is never fetched.
+  uc: {
+    id: "uc",
+    baseUrl: "wss://tts-stream.chatuncensored.ai",
+    authType: "web-cookie",
+    authHeader: "none",
+    format: "uc-tts",
+    models: [{ id: "jade", name: "UC Voice (Jade)" }],
   },
 };
 

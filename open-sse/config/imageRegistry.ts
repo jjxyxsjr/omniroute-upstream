@@ -237,37 +237,6 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     supportedSizes: ["1024x1024", "1024x1536", "1536x1024"],
   },
 
-  "chatgpt-web": {
-    id: "chatgpt-web",
-    alias: "cgpt-web",
-    baseUrl: "https://chatgpt.com/backend-api/f/conversation",
-    authType: "apikey",
-    authHeader: "cookie",
-    format: "chatgpt-web",
-    models: [{ id: "gpt-5.5", name: "GPT-5.5 Instant (ChatGPT Web Image)" }],
-    supportedSizes: ["1024x1024", "1024x1536", "1536x1024"],
-  },
-
-  // #10466: Gemini Web session image generation (Nano Banana). Same
-  // web-cookie transport as the gemini-web chat provider — the handler
-  // drives the session executor in image mode and extracts the generated
-  // asset URLs from the StreamGenerate frames.
-  "gemini-web": {
-    id: "gemini-web",
-    alias: "gweb",
-    baseUrl: "https://gemini.google.com/app",
-    authType: "apikey",
-    authHeader: "cookie",
-    format: "gemini-web",
-    // `-web` suffix on purpose: the bare `nano-banana` id is owned by
-    // adobe-firefly (operator decision 2026-07-31, pinned by the
-    // cheaperinference-image-models guard). parseImageModel's bare-model scan
-    // walks providers in insertion order, so a bare `nano-banana` here would
-    // steal that resolution. Keep this id distinct.
-    models: [{ id: "nano-banana-web", name: "Nano Banana (Gemini Web Image)" }],
-    supportedSizes: ["1024x1024", "1024x1536", "1536x1024"],
-  },
-
   // Cursor plan image generation via the Agent CLI native `generateImage` tool.
   // Reuses the same OAuth/API-key connection as chat (`provider: "cursor"`).
   // Requires the `agent` binary (CURSOR_AGENT_BIN) — see cursorAgentImage handler.
@@ -287,16 +256,24 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     supportedSizes: ["1024x1024", "1024x1792", "1792x1024", "1024x1536", "1536x1024"],
   },
 
-  "microsoft-designer-web": {
-    id: "microsoft-designer-web",
-    alias: "msdesigner",
-    baseUrl:
-      "https://designerapp.officeapps.live.com/designerapp/DallE.ashx?action=GetDallEImagesCogSci",
+  maxai: {
+    id: "maxai",
+    alias: "mx",
+    baseUrl: "https://api.maxai.me/gpt/get_image_generate_response",
     authType: "apikey",
     authHeader: "bearer",
-    format: "designer-web",
-    models: [{ id: "dall-e-3", name: "DALL-E 3 (Microsoft Designer Web)" }],
-    supportedSizes: ["1024x1024", "1792x1024", "1024x1792"],
+    format: "maxai-image",
+    models: [
+      { id: "gpt-image-1", name: "GPT Image 1 (MaxAI)" },
+      { id: "dall-e-3", name: "DALL-E 3 (MaxAI)" },
+      { id: "flux-1-schnell", name: "FLUX.1 [schnell] (MaxAI)" },
+      { id: "flux-1-dev", name: "FLUX.1 [dev] (MaxAI)" },
+      { id: "flux-1-pro", name: "FLUX.1 [pro] (MaxAI)" },
+      { id: "sd3-medium", name: "Stable Diffusion 3 Medium (MaxAI)" },
+    ],
+    // gpt-image-1/dall-e-3 are size-snapped to 1024x1024 by the handler; flux
+    // models pass any size through.
+    supportedSizes: ["1024x1024", "1024x1536", "1536x1024", "1024x1792", "1792x1024"],
   },
 
   xai: {
@@ -878,6 +855,44 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     supportedSizes: ["1024x1024", "2048x2048"],
   },
   aihorde: AI_HORDE_IMAGE_PROVIDER,
+
+  // Keep UC after every existing image provider because parseImageModel() resolves
+  // bare duplicate ids by first match. Explicit `uc/` routes remain available while
+  // historical owners retain bare ids such as nano-banana and z-image-turbo.
+  uc: {
+    id: "uc",
+    baseUrl: "https://internal.chatuncensored.ai/v2/image-gen",
+    authType: "apikey",
+    authHeader: "bearer",
+    format: "uc-image",
+    models: [
+      { id: "model-dev", name: "Flux Dev (UC)" },
+      { id: "model-pro", name: "Flux Pro (UC)" },
+      { id: "model-1.1", name: "Flux Pro 1.1 (UC)" },
+      { id: "model-1.2", name: "Wan 2.2 (UC)" },
+      { id: "seedream-v4.5", name: "Seedream v4.5 (UC)" },
+      { id: "seedream-v5", name: "Seedream v5 (UC)" },
+      { id: "flux-2", name: "FLUX.2 (UC)" },
+      { id: "flux-2-pro", name: "FLUX.2 Pro (UC)" },
+      { id: "lustify-v7", name: "Lustify v7 (UC)" },
+      { id: "nano-banana", name: "Nano Banana (UC)" },
+      { id: "nano-banana-2", name: "Nano Banana 2 (UC)" },
+      { id: "nano-banana-pro", name: "Nano Banana Pro (UC)" },
+      { id: "nano-banana-ultra", name: "Nano Banana Ultra (UC)" },
+      { id: "gpt-image", name: "GPT Image (UC)" },
+      { id: "gpt-image-2", name: "GPT Image 2 (UC)" },
+      { id: "realism", name: "Realism (UC)" },
+      { id: "realism-2", name: "Realism 2 (UC)" },
+      { id: "z-image-turbo", name: "Z-Image Turbo (UC)" },
+      { id: "prefect-pony-xl", name: "Prefect Pony XL (UC)" },
+      { id: "wan-2.6", name: "Wan 2.6 (UC)" },
+      { id: "wan-2.7-text-to-image", name: "Wan 2.7 Text-to-Image (UC)" },
+      { id: "wan-2.7-text-to-image-pro", name: "Wan 2.7 Text-to-Image Pro (UC)" },
+    ],
+    // Persona web derives imageWidth/imageHeight from an aspect ratio; uc-direct
+    // passes any OpenAI-style size through. These are the aspect buckets.
+    supportedSizes: ["1024x1024", "1024x576", "576x1024", "1024x768", "768x1024"],
+  },
 };
 
 /**
@@ -925,7 +940,10 @@ export function parseImageModel(modelStr) {
 
   // No provider prefix — try to find the model in every provider, excluding cookie-auth (web) bridges
   for (const [providerId, config] of Object.entries(IMAGE_PROVIDERS)) {
-    if (config.authHeader !== "cookie" && (config.routingAliases?.includes(modelStr) || config.models.some((m) => m.id === modelStr))) {
+    if (
+      config.authHeader !== "cookie" &&
+      (config.routingAliases?.includes(modelStr) || config.models.some((m) => m.id === modelStr))
+    ) {
       return { provider: providerId, model: modelStr };
     }
   }

@@ -1,15 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
-import {
-  getCachedProviderConnectionById,
-  updateProviderConnection,
-  isCloudEnabled,
-  resolveProxyForConnection,
-} from "@/lib/localDb";
+import { getCachedProviderConnectionById } from "@/lib/db/readCache";
+import { updateProviderConnection } from "@/lib/db/providers";
+import { isCloudEnabled, resolveProxyForConnection } from "@/lib/db/settings";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { syncToCloud } from "@/lib/cloudSync";
 import { validateProviderApiKey } from "@/lib/providers/validation";
+import { projectProviderValidationResultForPublicResponse } from "@/lib/providers/validation/transport";
 import { getCliRuntimeStatus } from "@/shared/services/cliRuntime";
 import { buildQoderCliNotFoundHint } from "@omniroute/open-sse/services/qoderCliResolve.ts";
 // Use the shared open-sse token refresh with built-in dedup/race-condition cache
@@ -33,14 +31,24 @@ import { shouldUseApiKeyConnectionTest } from "./webSessionTestDispatch";
 import { testCodexAppServerConnection, makeDiagnosis } from "./codexAppServerHealth";
 import { testArkPlanConnection } from "./arkPlanHealth";
 import { removeConnectionHealth } from "@omniroute/open-sse/services/apiKeyRotator.ts";
+import { recoverKeyHealth } from "@omniroute/open-sse/services/apiKeyRotator.ts";
+import { shouldClearErrorStateOnValidProbe } from "@/lib/usage/providerLimits";
 import { isConnectionUnavailableToAuxiliaryActivity } from "@/lib/exclusiveLeaseIsolation";
-import { classifyAmbiguousOrAuthError, type ClassifyFailureArgs } from "./mistralAmbiguousAuth";
 import { buildApiKeyConnectionTestResult } from "./apiKeyTestResult";
 import { classifyOAuthProbeInconclusive, OAUTH_TEST_CONFIG } from "./oauthTestConfig";
 import { isGeoBlockedError } from "@omniroute/open-sse/services/errorClassifier.ts";
+import * as retirement from "@/lib/providers/chatgptWebRetirementResponse";
+import {
+  classifyFailure,
+  isAccountDeactivatedMessage,
+  projectConnectionTestResultForPublicResponse,
+  projectProviderRuntimeForPublicResponse,
+  toSafeMessage,
+} from "./publicErrorBoundary";
 
-// Bound the OAuth probe so a hung upstream can't block the connection-test queue
-// forever (#1449). Mirrors the 30s timeout the API-key path uses via validateProviderApiKey.
+export { classifyFailure, projectProviderRuntimeForPublicResponse } from "./publicErrorBoundary";
+
+// Match the API-key path's 30s timeout so a hung OAuth upstream cannot block the test queue.
 const OAUTH_TEST_TIMEOUT_MS = 30_000;
 
 import { CLI_RUNTIME_PROVIDER_MAP } from "./cliRuntimeProviderMap";
@@ -51,115 +59,6 @@ const providerConnectionTestBodySchema = z.object({
   /** Bypass the 017 debounce for operator-initiated tests. */
   forceRefresh: z.boolean().optional(),
 });
-
-function toSafeMessage(value: any, fallback = "Unknown error"): string {
-  if (typeof value !== "string") return fallback;
-  const trimmed = value.trim();
-  return trimmed || fallback;
-}
-
-/**
- * A provider/account that the upstream has deactivated (vs. a revoked/expired token).
- * #1444: a Codex account can have a perfectly healthy OAuth refresh while its ChatGPT
- * account is deactivated, in which case the API returns 401 — mislabeling that as
- * "Token invalid or revoked" hides the real cause. Mirrors the deactivation phrases the
- * account-fallback classifier already trusts.
- */
-function isAccountDeactivatedMessage(text: string): boolean {
-  const n = (text || "").toLowerCase();
-  return n.includes("account_deactivated") || (n.includes("deactivat") && n.includes("account"));
-}
-
-export function classifyFailure({
-  error,
-  statusCode = null,
-  refreshFailed = false,
-  unsupported = false,
-  provider,
-}: ClassifyFailureArgs) {
-  const message = toSafeMessage(error, "Connection test failed");
-  const normalized = message.toLowerCase();
-  const numericStatus = Number.isFinite(statusCode) ? Number(statusCode) : null;
-
-  if (unsupported) {
-    return makeDiagnosis("unsupported", "validation", message, "unsupported");
-  }
-
-  if (refreshFailed || normalized.includes("refresh failed")) {
-    return makeDiagnosis("token_refresh_failed", "oauth", message, "refresh_failed");
-  }
-
-  // #1444: a deactivated account is distinct from a revoked/expired token — surface it
-  // as account_deactivated (which the dashboard renders as "Account Deactivated") before
-  // the generic 401/403 branch below would mark it "upstream_auth_error".
-  if (isAccountDeactivatedMessage(normalized)) {
-    return makeDiagnosis("account_deactivated", "account", message, "account_deactivated");
-  }
-
-  if (numericStatus === 401 || numericStatus === 403) {
-    return classifyAmbiguousOrAuthError(provider, normalized, message, numericStatus);
-  }
-
-  if (numericStatus === 429) {
-    return makeDiagnosis("upstream_rate_limited", "upstream", message, "429");
-  }
-
-  if (numericStatus && numericStatus >= 500) {
-    return makeDiagnosis("upstream_unavailable", "upstream", message, String(numericStatus));
-  }
-
-  if (normalized.includes("token expired") || normalized.includes("expired")) {
-    return makeDiagnosis("token_expired", "oauth", message, "token_expired");
-  }
-
-  if (
-    normalized.includes("invalid api key") ||
-    normalized.includes("token invalid") ||
-    normalized.includes("revoked") ||
-    normalized.includes("access denied") ||
-    normalized.includes("unauthorized") ||
-    normalized.includes("forbidden")
-  ) {
-    return makeDiagnosis(
-      "upstream_auth_error",
-      "upstream",
-      message,
-      numericStatus ? String(numericStatus) : "auth_failed"
-    );
-  }
-
-  if (
-    normalized.includes("rate limit") ||
-    normalized.includes("quota") ||
-    normalized.includes("too many requests")
-  ) {
-    return makeDiagnosis(
-      "upstream_rate_limited",
-      "upstream",
-      message,
-      numericStatus ? String(numericStatus) : "rate_limited"
-    );
-  }
-
-  if (
-    normalized.includes("fetch failed") ||
-    normalized.includes("network") ||
-    normalized.includes("timeout") ||
-    normalized.includes("timed out") ||
-    normalized.includes("econn") ||
-    normalized.includes("enotfound") ||
-    normalized.includes("socket")
-  ) {
-    return makeDiagnosis("network_error", "upstream", message, "network_error");
-  }
-
-  return makeDiagnosis(
-    "upstream_error",
-    "upstream",
-    message,
-    numericStatus ? String(numericStatus) : "upstream_error"
-  );
-}
 
 function hasQoderToken(connection: any): boolean {
   if (typeof connection?.apiKey === "string" && connection.apiKey.trim().length > 0) return true;
@@ -225,7 +124,10 @@ async function getProviderRuntimeStatus(connection: any) {
       error: runtimeMessage,
     };
   } catch (error) {
-    const runtimeMessage = `Failed to check local CLI runtime: ${(error as any)?.message || "runtime_check_failed"}`;
+    const runtimeMessage = `Failed to check local CLI runtime: ${toSafeMessage(
+      error,
+      "runtime_check_failed"
+    )}`;
     return {
       installed: false,
       runnable: false,
@@ -309,7 +211,10 @@ async function refreshOAuthToken(connection: any) {
     });
     return result; // { accessToken, expiresIn, refreshToken } or null
   } catch (err) {
-    console.error(`Error refreshing ${provider} token:`, (err as any).message);
+    console.error(
+      `Error refreshing ${provider} token:`,
+      toSafeMessage(err, "Token refresh failed")
+    );
     return null;
   }
 }
@@ -383,7 +288,10 @@ async function syncToCloudIfEnabled() {
     const machineId = await getConsistentMachineId();
     await syncToCloud(machineId);
   } catch (error) {
-    console.log("Error syncing to cloud after token refresh:", error);
+    console.log(
+      "Error syncing to cloud after token refresh:",
+      toSafeMessage(error, "Cloud sync failed")
+    );
   }
 }
 
@@ -941,11 +849,13 @@ async function testApiKeyConnection(connection: any) {
     };
   }
 
-  const result = await validateProviderApiKey({
-    provider: connection.provider,
-    apiKey: connection.apiKey,
-    providerSpecificData: connection.providerSpecificData,
-  });
+  const result = projectProviderValidationResultForPublicResponse(
+    await validateProviderApiKey({
+      provider: connection.provider,
+      apiKey: connection.apiKey,
+      providerSpecificData: connection.providerSpecificData,
+    })
+  );
 
   if (result.unsupported) {
     const error = "Provider test not supported";
@@ -1003,13 +913,16 @@ async function runConnectionTest(connectionId: string, validationModelId?: strin
       latencyMs: 0,
     };
   }
+  retirement.assertProviderAvailable(provider);
 
-  // Resolve proxy for this connection (key → combo → provider → global → direct)
   let proxyInfo: any = null;
   try {
     proxyInfo = await resolveProxyForConnection(connectionId);
-  } catch (proxyErr: any) {
-    console.log(`[ConnectionTest] Failed to resolve proxy for ${connectionId}:`, proxyErr?.message);
+  } catch (proxyErr: unknown) {
+    console.log(
+      `[ConnectionTest] Failed to resolve proxy for ${connectionId}:`,
+      toSafeMessage(proxyErr, "Proxy resolution failed")
+    );
   }
 
   let result;
@@ -1065,21 +978,52 @@ async function runConnectionTest(connectionId: string, validationModelId?: strin
     );
   }
 
+  // Every runtime path converges here before any health-state write, diagnosis,
+  // persistent log, or public response. API-key validation is projected at its
+  // own seam above as well so future refactors cannot move it past this boundary.
+  result = projectConnectionTestResultForPublicResponse(result);
+  const publicRuntime = projectProviderRuntimeForPublicResponse(runtime);
+
   const latencyMs = Date.now() - startTime;
+
+  // A representative-model 402 on an openai-compatible / per-model-quota
+  // gateway must lock only that model. The connection stays selectable for
+  // sibling upstreams that still return 200.
+  const connectionPsd = (connection.providerSpecificData as Record<string, unknown> | null) || {};
+  const configuredModelId =
+    typeof connectionPsd.validationModelId === "string" ? connectionPsd.validationModelId : "";
+  const probedModelId = validationModelId || configuredModelId;
+  if (result.valid && result.statusCode === 402 && probedModelId) {
+    lockModelIfPerModelQuota(provider, connectionId, probedModelId, "credits", 60 * 60 * 1000);
+  }
 
   // Unsupported validation capability is neutral: the probe established that
   // this provider cannot be verified through the generic test surface, not
-  // that its credential is invalid. Do not mutate persisted credential health.
+  // that its credential is invalid. Do not mutate persisted credential health
+  // (testStatus/lastError/etc.) — but DO activate it if it isn't already: a
+  // connection that can never be health-checked would otherwise stay hidden
+  // from /v1/models forever under the "only advertise tested connections"
+  // default (isActive starts false on creation — see POST /api/providers),
+  // silently regressing every provider without a test surface.
   if (result.skipped === true) {
+    if (connection.isActive !== true) {
+      try {
+        await updateProviderConnection(connectionId, { isActive: true });
+      } catch (activateError) {
+        console.log(
+          `[ConnectionTest] Failed to activate unverifiable connection ${connectionId}:`,
+          toSafeMessage(activateError, "Connection activation failed")
+        );
+      }
+    }
     return {
       ...result,
       latencyMs,
-      runtime: runtime || null,
+      runtime: publicRuntime,
       testedAt: null,
     };
   }
 
-  // Build update data
   const now = new Date().toISOString();
   const diagnosis =
     result.diagnosis ||
@@ -1099,23 +1043,55 @@ async function runConnectionTest(connectionId: string, validationModelId?: strin
     terminalTestStatuses.has(String(diagnosis.code ?? diagnosis.type ?? "").toLowerCase());
   const testFailureCooldownMs = result.valid ? 0 : 30_000; // 30s retry window
 
+  // A successful credential probe proves the KEY is valid. It does NOT prove the
+  // quota window reopened: the probe is a cheap auth/models call that never touches
+  // the chat quota a weekly cap applies to. Clearing an ACTIVE cooldown here — which
+  // the credential-health scheduler triggers for every connection every 300s — put
+  // `zai/glm-5.3` back to `active` / `rate_limited_until = NULL` within 30s of every
+  // restart, so combo dispatched it straight into the same weekly 429. Same rule as
+  // maybeClearRecoveredQuotaState: a future rateLimitedUntil is the 429 handler's
+  // hard statement and no poller may overrule it. Once it elapses, the next probe
+  // clears it normally.
+  const clearErrorState = shouldClearErrorStateOnValidProbe(
+    connection as { rateLimitedUntil?: string | null },
+    result.valid
+  );
+  const lastErrorType = result.valid ? connection.lastErrorType : diagnosis.type;
+
   const updateData: Record<string, any> = {
-    testStatus: result.valid ? "active" : "error",
-    lastError: result.valid ? null : result.error,
-    lastErrorAt: result.valid ? null : now,
+    testStatus: clearErrorState ? "active" : result.valid ? connection.testStatus : "error",
+    // A passing test is the sole activation signal under the "only advertise
+    // tested-working connections" default — see POST /api/providers, which
+    // now creates connections isActive:false. Only ever flips ON here: a
+    // failing test intentionally leaves isActive untouched (a transient
+    // failure on an already-active, already-working connection must not take
+    // it out of rotation — that's what the cooldown/rateLimitedUntil below is
+    // for), so this never deactivates anything.
+    ...(result.valid ? { isActive: true } : {}),
+    lastError: clearErrorState ? null : result.valid ? connection.lastError : result.error,
+    lastErrorAt: clearErrorState ? null : result.valid ? connection.lastErrorAt : now,
     lastTested: now,
-    lastErrorType: result.valid ? null : diagnosis.type,
-    lastErrorSource: result.valid ? null : diagnosis.source,
-    errorCode: result.valid ? null : diagnosis.code || result.statusCode || null,
-    rateLimitedUntil:
-      result.valid || isTerminalFailure
-        ? result.valid
-          ? null
-          : connection.rateLimitedUntil || null
-        : new Date(Date.now() + testFailureCooldownMs).toISOString(),
+    lastErrorType: clearErrorState ? null : lastErrorType,
+    lastErrorSource: clearErrorState
+      ? null
+      : result.valid
+        ? connection.lastErrorSource
+        : diagnosis.source,
+    errorCode: clearErrorState
+      ? null
+      : result.valid
+        ? connection.errorCode
+        : diagnosis.code || result.statusCode || null,
+    rateLimitedUntil: clearErrorState
+      ? null
+      : isTerminalFailure
+        ? connection.rateLimitedUntil || null
+        : result.valid
+          ? connection.rateLimitedUntil || null
+          : new Date(Date.now() + testFailureCooldownMs).toISOString(),
   };
 
-  if (result.valid) {
+  if (clearErrorState) {
     updateData.backoffLevel = 0;
 
     const psd = connection?.providerSpecificData as Record<string, unknown> | undefined;
@@ -1139,7 +1115,11 @@ async function runConnectionTest(connectionId: string, validationModelId?: strin
     } catch {}
   }
 
-  // If token was refreshed, update tokens in DB
+  if (result.valid && (connection.apiKey || connection.accessToken)) {
+    const recovered = recoverKeyHealth(connectionId, "primary", connection.providerSpecificData);
+    if (recovered) updateData.providerSpecificData = recovered;
+  }
+
   if (result.refreshed && result.newTokens) {
     updateData.accessToken = result.newTokens.accessToken;
     if (result.newTokens.refreshToken) {
@@ -1203,7 +1183,7 @@ async function runConnectionTest(connectionId: string, validationModelId?: strin
     diagnosis,
     latencyMs,
     statusCode: result.statusCode || null,
-    runtime: runtime || null,
+    runtime: publicRuntime,
     testedAt: now,
   };
 }
@@ -1259,7 +1239,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     return NextResponse.json(data);
   } catch (error) {
-    console.log("Error testing connection:", error);
+    const retired = retirement.responseForError(error);
+    if (retired) return retired;
+    console.log("Error testing connection:", toSafeMessage(error, "Connection test failed"));
     return NextResponse.json({ error: "Test failed" }, { status: 500 });
   }
 }

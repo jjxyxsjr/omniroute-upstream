@@ -11,8 +11,26 @@
 import { saveCallLog } from "@/lib/usageDb";
 import { sanitizeErrorMessage } from "../../utils/error.ts";
 import { formatSearchProviderFailure } from "./providerFailure.ts";
+import { HTTP_STATUS } from "../../config/constants.ts";
+import { isSubscriptionQuotaText } from "../../services/quotaTextCooldowns.ts";
 import type { SearchProviderConfig } from "../../config/searchRegistry.ts";
 import type { SearchResult } from "../search.ts";
+
+const SEARCH_COOLDOWN_STATUSES = new Set([
+  HTTP_STATUS.PAYMENT_REQUIRED,
+  HTTP_STATUS.REQUEST_TIMEOUT,
+  HTTP_STATUS.RATE_LIMITED,
+  HTTP_STATUS.PLAN_LIMIT_EXCEEDED,
+  HTTP_STATUS.SERVER_ERROR,
+  HTTP_STATUS.BAD_GATEWAY,
+  HTTP_STATUS.SERVICE_UNAVAILABLE,
+  HTTP_STATUS.GATEWAY_TIMEOUT,
+]);
+
+export function shouldCoolDownSearchConnection(status: number, errorText: string): boolean {
+  if (SEARCH_COOLDOWN_STATUSES.has(status)) return true;
+  return isSubscriptionQuotaText(errorText.toLowerCase());
+}
 
 /** Resolved proxy binding for a single provider attempt. */
 export interface ResolvedSearchProxy {
@@ -119,7 +137,11 @@ export interface ProviderFetchResult {
     results: SearchResult[];
     answer: null;
     usage: { queries_used: number; search_cost_usd: number };
-    metrics: { response_time_ms: number; upstream_latency_ms: number; total_results_available: number | null };
+    metrics: {
+      response_time_ms: number;
+      upstream_latency_ms: number;
+      total_results_available: number | null;
+    };
     errors: [];
   };
 }
@@ -160,7 +182,9 @@ export interface ExecuteProviderFetchParams {
  * This is the single chokepoint tryProvider() delegates to after building
  * the request and resolving the proxy — keeps search.ts to wiring only.
  */
-export async function executeProviderFetch(p: ExecuteProviderFetchParams): Promise<ProviderFetchResult> {
+export async function executeProviderFetch(
+  p: ExecuteProviderFetchParams
+): Promise<ProviderFetchResult> {
   const { config, url, init, controller, timer, query, searchType, maxResults, startTime } = p;
   const { connectionId, proxy, proxyLevel, log, normalize } = p;
   const emitEvent = (status: string) =>
@@ -190,7 +214,19 @@ export async function executeProviderFetch(p: ExecuteProviderFetchParams): Promi
       if (log) {
         log.error("SEARCH", `${config.id} error ${response.status}: ${errorText.slice(0, 200)}`);
       }
-      logCall({ status: response.status, duration: Date.now() - startTime, error: errorText.slice(0, 500) });
+      if (connectionId && shouldCoolDownSearchConnection(response.status, errorText)) {
+        try {
+          const { markAccountUnavailable } = await import("@/sse/services/auth.ts");
+          await markAccountUnavailable(connectionId, response.status, errorText, config.id, null);
+        } catch {
+          /* non-critical - background cooldown mark must not break search response */
+        }
+      }
+      logCall({
+        status: response.status,
+        duration: Date.now() - startTime,
+        error: errorText.slice(0, 500),
+      });
       await emitEvent("error");
       return {
         success: false,
@@ -231,6 +267,20 @@ export async function executeProviderFetch(p: ExecuteProviderFetchParams): Promi
   } catch (err: unknown) {
     clearTimeout(timer);
     const error = err instanceof Error ? err : new Error(String(err));
+    // Envelope-level provider failure surfaced by a normalizer (e.g. AnySearch
+    // `{ code: -1 }`): not a transport fault. Quota signals map to 402 so
+    // quota-aware failover treats them as exhausted; anything else is 502.
+    if (error.name === "AnysearchSearchEnvelopeError") {
+      const quota = (error as { quota?: boolean }).quota === true;
+      const status = quota ? 402 : 502;
+      const safeMsg = sanitizeErrorMessage(error.message) || "provider envelope error";
+      if (log) {
+        log.error("SEARCH", `${config.id} envelope error: ${safeMsg}`);
+      }
+      logCall({ status, duration: Date.now() - startTime, error: safeMsg });
+      await emitEvent("error");
+      return { success: false, status, error: `Search provider ${config.id}: ${safeMsg}` };
+    }
     const isTimeout = error.name === "AbortError";
     const safeMsg = sanitizeErrorMessage(error.message) || "fetch failed";
     if (log) {

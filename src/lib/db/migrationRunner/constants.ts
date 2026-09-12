@@ -159,6 +159,14 @@ export const RENAMED_MIGRATION_COMPATIBILITY = [
     toName: "windsurf_to_devin_desktop",
   },
   {
+    // inspector_custom_hosts was once published in slot 074, now occupied by
+    // discovery_results. Its canonical idempotent migration lives at 081.
+    fromVersion: "074",
+    fromName: "inspector_custom_hosts",
+    toVersion: "081",
+    toName: "inspector_custom_hosts",
+  },
+  {
     fromVersion: "134",
     fromName: "ccr_blocks",
     toVersion: "139",
@@ -178,6 +186,30 @@ export const RENAMED_MIGRATION_COMPATIBILITY = [
     fromName: "radar_local_model_state",
     toVersion: "153",
     toName: "radar_local_model_state",
+  },
+  {
+    fromVersion: "056",
+    fromName: "provider_default",
+    toVersion: "056",
+    toName: "mcp_accessibility_compression",
+  },
+  {
+    fromVersion: "073",
+    fromName: "discovery_results",
+    toVersion: "073",
+    toName: "per_model_token_limits",
+  },
+  {
+    fromVersion: "077",
+    fromName: "plugin_metrics",
+    toVersion: "077",
+    toName: "api_key_stream_default_mode",
+  },
+  {
+    fromVersion: "101",
+    fromName: "proxy_pool_rotation",
+    toVersion: "101",
+    toName: "api_key_usage_limits",
   },
 ] as const;
 

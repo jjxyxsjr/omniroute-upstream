@@ -9,6 +9,9 @@ import {
   GITHUB_COPILOT_CHAT_USER_AGENT,
   GITHUB_COPILOT_EDITOR_VERSION,
 } from "@omniroute/open-sse/config/providerHeaderProfiles.ts";
+// userAgent / editorVersion on GITHUB_CONFIG are captured-pin snapshots for
+// lockstep tests. Request construction must call getGitHubCopilotChatUserAgent()
+// (#12417) — see providers/github.ts and providers/ghe-copilot.ts.
 import {
   GROK_BUILD_DEVICE_CODE_URL,
   GROK_BUILD_OAUTH_ISSUER,
@@ -435,17 +438,6 @@ export const TRAE_CONFIG = {
     "Authorize via trae.ai in the popup, or sign in to solo.trae.ai and paste the Cloud-IDE-JWT from the Authorization header (~14-day lifetime).",
 };
 
-// Raycast Pro AI — reverse-engineered, unofficial API. LOCAL / PERSONAL USE ONLY.
-// See docs/security/PUBLIC_CREDS.md pattern: no secrets in repo; credentials from user's Mac.
-export const RAYCAST_CONFIG = {
-  apiEndpoint: "https://backend.raycast.com",
-  chatEndpoint: "/api/v1/ai/chat_completions",
-  modelsEndpoint: "/api/v1/ai/models",
-  clientType: "macos-app",
-  captureInstructions:
-    "macOS only: use Auto-Import (Keychain + Raycast DB) or capture Bearer, X-Raycast-DeviceId, and optional X-Raycast-Signature JWT from backend.raycast.com traffic.",
-};
-
 // Devin Desktop / Devin CLI import-token configuration.
 // Public product identity is Devin. The upstream transport still identifies
 // the IDE as `windsurf`; authentication itself is import-only.
@@ -509,10 +501,6 @@ export const PROVIDERS = {
   KIRO: "kiro",
   AMAZON_Q: "amazon-q",
   CURSOR: "cursor",
-  // #8895 — registered in src/lib/oauth/providers/index.ts but missing here, so
-  // every consumer reading PROVIDERS (onboarding wizard, test-connection routing)
-  // did not know Raycast Pro exists as an OAuth provider.
-  RAYCAST: "raycast",
   KILOCODE: "kilocode",
   CLINE: "cline",
   CLINEPASS: "clinepass",

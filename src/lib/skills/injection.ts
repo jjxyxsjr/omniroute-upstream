@@ -63,9 +63,19 @@ function normalizeInputSchema(input: Record<string, unknown>): Record<string, un
   if (typeof input.type === "string") {
     return input;
   }
+  // Some builtin skills declare property types in shorthand ("content":
+  // "string" instead of "content": { "type": "string" }). Strict schema
+  // validators — Zhipu GLM served through opencode-go (upstream error [1210]
+  // "Invalid API parameter") — reject the shorthand as malformed JSON Schema,
+  // which 400s every request the skill tools are injected into. Expand string
+  // values to { type: value }; non-string values pass through untouched.
+  const properties: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    properties[key] = typeof value === "string" ? { type: value } : value;
+  }
   return {
     type: "object",
-    properties: input,
+    properties,
   };
 }
 
@@ -243,6 +253,28 @@ function scoreAutoSkill(
 }
 
 export function injectSkills(options: InjectionOptions): unknown[] {
+  return injectSkillsWithMetadata(options).tools;
+}
+
+export interface InjectSkillsWithMetadataResult {
+  tools: unknown[];
+  injectedNames: string[];
+}
+
+function getToolNameFromDef(tool: unknown): string {
+  if (!tool || typeof tool !== "object") return "";
+  const r = tool as Record<string, unknown>;
+  if (typeof r.name === "string") return r.name;
+  if (r.function && typeof r.function === "object") {
+    const fn = r.function as Record<string, unknown>;
+    if (typeof fn.name === "string") return fn.name;
+  }
+  return "";
+}
+
+export function injectSkillsWithMetadata(
+  options: InjectionOptions
+): InjectSkillsWithMetadataResult {
   const contextText = buildContextText(options);
   const contextTokens = extractTokens(contextText);
   const backgroundTokens = extractTokens(toLowerText(options.backgroundReason));
@@ -285,7 +317,7 @@ export function injectSkills(options: InjectionOptions): unknown[] {
       apiKeyId: options.apiKeyId,
       reason: "no_enabled_skills",
     });
-    return options.existingTools || [];
+    return { tools: options.existingTools || [], injectedNames: [] };
   }
 
   log.info("skills.injection.injected", {
@@ -307,11 +339,30 @@ export function injectSkills(options: InjectionOptions): unknown[] {
     }
   });
 
-  if (options.existingTools && options.existingTools.length > 0) {
-    return [...injectedTools, ...options.existingTools];
+  // Compute the set of existing tool names to exclude client collisions.
+  const existingToolNames = new Set(
+    (options.existingTools || []).map((t) => getToolNameFromDef(t)).filter(Boolean)
+  );
+
+  // Filter out skills whose encoded name collides with a client-declared tool.
+  const nonCollidingTools = injectedTools.filter((tool) => {
+    const name = getToolNameFromDef(tool);
+    return name && !existingToolNames.has(name);
+  });
+
+  const injectedNames: string[] = [];
+  for (const tool of nonCollidingTools) {
+    const name = getToolNameFromDef(tool);
+    if (name) {
+      injectedNames.push(name);
+    }
   }
 
-  return injectedTools;
+  if (options.existingTools && options.existingTools.length > 0) {
+    return { tools: [...nonCollidingTools, ...options.existingTools], injectedNames };
+  }
+
+  return { tools: nonCollidingTools, injectedNames };
 }
 
 export function injectSkillTools(

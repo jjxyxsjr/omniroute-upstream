@@ -2,6 +2,7 @@ import createNextIntlPlugin from "next-intl/plugin";
 import { createMDX } from "fumadocs-mdx/next";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { betterSqlite3AliasFor } from "./scripts/build/better-sqlite3-stub-flag.mjs";
 import { mitmManagerAliasFor } from "./scripts/build/mitm-stub-flag.mjs";
 import { normalizeBasePath } from "./scripts/build/normalizeBasePath.mjs";
 import {
@@ -73,12 +74,43 @@ function isNextIntlExtractorDynamicImportWarning(warning) {
   );
 }
 
+const IGNORED_INFRASTRUCTURE_BUILD_DEPENDENCY_MODULES = [
+  "/node_modules/fumadocs-mdx/dist/load-from-file-",
+  "/node_modules/next-intl/dist/esm/production/extractor/format/index.js",
+];
+
+function isKnownInfrastructureBuildDependencyWarning(args) {
+  const message = args
+    .filter((value) => typeof value === "string")
+    .join(" ")
+    .replaceAll("\\", "/");
+  return (
+    message.includes("webpack.FileSystemInfo") &&
+    message.includes("for build dependencies failed at 'import(") &&
+    message.includes("incorrect cache invalidation") &&
+    IGNORED_INFRASTRUCTURE_BUILD_DEPENDENCY_MODULES.some((modulePath) =>
+      message.includes(modulePath)
+    )
+  );
+}
+
+function filterKnownInfrastructureWarnings(baseConsole) {
+  const filteredConsole = Object.create(baseConsole);
+  filteredConsole.warn = (...args) => {
+    if (isKnownInfrastructureBuildDependencyWarning(args)) return;
+    Reflect.apply(baseConsole.warn, baseConsole, args);
+  };
+  return filteredConsole;
+}
+
 // OMNIROUTE_BUILD_PROFILE=minimal physically removes four optional privileged
 // modules (MITM cert install, Zed keychain import, Cloud Sync, 9router
 // installer) from the built bundle by aliasing them to feature-disabled stubs.
 // The resulting artifact is intended to be published as `omniroute-secure`
 // for security-sensitive environments. See docs/security/SOCKET_DEV_FINDINGS.md.
 const isMinimalBuild = process.env.OMNIROUTE_BUILD_PROFILE === "minimal";
+// Contributor builds validate compilation only and do not need a shippable standalone bundle.
+const isContributorBuild = process.env.OMNIROUTE_BUILD_PROFILE === "contributor";
 
 // #10273: `null` unless the operator opts in with DASHBOARD_ALLOW_EMBED=vscode. Read at build
 // time like every other knob in this file (OMNIROUTE_BASE_PATH, OMNIROUTE_BUILD_PROFILE, …),
@@ -125,6 +157,13 @@ const nextConfig = {
   // examples. Empty by default (root deploys unchanged).
   env: {
     NEXT_PUBLIC_OMNIROUTE_BASE_PATH: normalizeBasePath(process.env.OMNIROUTE_BASE_PATH),
+    // Deployment identity for the PWA service worker URL (PwaRegister):
+    // a browser holding a worker from an older deployment must see a
+    // different /sw.js?v=<id> URL so the browser treats it as an update
+    // instead of keeping the old generation in control. Falls back to a
+    // value that is unique per build run when git is absent (CI tarball).
+    NEXT_PUBLIC_SW_BUILD_ID:
+      process.env.OMNIROUTE_SW_BUILD_ID || process.env.SOURCE_VERSION || `${Date.now()}`,
   },
   distDir,
   // Turbopack config: redirect native modules to stubs at build time
@@ -138,10 +177,14 @@ const nextConfig = {
       // the stub to every npm/Electron/VPS artifact and broke Agent Bridge
       // start for all non-Docker users (#6344). See scripts/build/mitm-stub-flag.mjs.
       ...mitmManagerAliasFor(process.env),
-      // Build-time stub so the bundler never traces the native better-sqlite3
-      // addon into a build worker (SIGABRT at worker teardown). Runtime still
-      // uses the real package via serverExternalPackages. (#10060)
-      "better-sqlite3": "./src/lib/db/better-sqlite3.stub.js",
+      // better-sqlite3 → build-time stub ONLY where the build worker actually
+      // aborts while tracing the native addon (SIGABRT at worker teardown,
+      // #10060); opt in with OMNIROUTE_BETTER_SQLITE3_STUB=1. The alias used to
+      // be unconditional on the premise that serverExternalPackages still won
+      // at runtime — it does not: resolveAlias rewrites the request before the
+      // externals check, so the stub was bundled and EVERY route answered 500
+      // (#11343). See scripts/build/better-sqlite3-stub-flag.mjs.
+      ...betterSqlite3AliasFor(process.env),
       ...minimalBuildAliases,
     },
     // src/lib/agentSkills/generator.ts builds its fs base path from a runtime
@@ -177,9 +220,12 @@ const nextConfig = {
       },
     ],
   },
-  output: "standalone",
+  ...(isContributorBuild ? {} : { output: "standalone" }),
   compress: true,
   productionBrowserSourceMaps: false,
+  // Issue #67: enable React Compiler — automates memoization, removes manual useCallback/useMemo debt.
+  // See: https://next.dev/blog/react-compiler
+  reactCompiler: true,
   // OmniRoute is a proxy for AI APIs — request bodies routinely include
   // multi-MB payloads (vision models, image edits, base64-encoded files,
   // long chat histories with embedded images). Next.js's Server Action
@@ -239,29 +285,42 @@ const nextConfig = {
       "./src/mitm/server.cjs",
       "./open-sse/services/compression/engines/rtk/filters/**/*.json",
       "./open-sse/services/compression/rules/**/*.json",
-      "./open-sse/lib/sha3_wasm_bg.wasm",
-      "./open-sse/lib/deepseek-pow-solver.cjs",
+      "./open-sse/lib/deepseek-pow-hash.js",
+      "./open-sse/lib/deepseek-pow-worker.mjs",
       // sql.js WASM is loaded at runtime by the sqljsAdapter fallback tier
       // (better-sqlite3 → node:sqlite → sql.js). Next traces sql-wasm.js but can
       // omit the runtime sql-wasm.wasm asset from the standalone bundle.
       "./node_modules/sql.js/dist/sql-wasm.wasm",
+      // tiktoken is server-externalized below so Node selects its CommonJS entry.
+      // That entry reads the tokenizer WASM beside itself at runtime.
+      "./node_modules/tiktoken/tiktoken_bg.wasm",
     ],
   },
   outputFileTracingExcludes: {
-    // Planning/task docs are not runtime assets and can break standalone copies
-    // when broad fs/path tracing pulls the whole repository into the NFT graph.
-    "/*": [
-      "./.git/**/*",
-      "./_tasks/**/*",
-      "./_references/**/*",
-      "./_ideia/**/*",
-      "./_mono_repo/**/*",
-      "./coverage/**/*",
-      "./test-results/**/*",
-      "./playwright-report/**/*",
-      "./app.__qa_backup/**/*",
-      "./tests/**/*",
-      "./logs/**/*",
+    // Planning/task docs, tests, and non-production worktrees are not runtime assets
+    // and break standalone copies when broad NFT tracing pulls the whole repository into memory.
+    // Using "**/*" ensures the exclusion applies across all app and API routes, not just "/".
+    "**/*": [
+      "**/.git/**",
+      "**/_tasks/**",
+      "**/_references/**",
+      "**/_ideia/**",
+      "**/_mono_repo/**",
+      "**/coverage/**",
+      "**/test-results/**",
+      "**/playwright-report/**",
+      "**/app.__qa_backup/**",
+      "**/tests/**",
+      "**/logs/**",
+      "**/.claude/**",
+      "**/.opencode/**",
+      "**/.scratch/**",
+      "**/.agents/**",
+      "**/.slim/**",
+      "**/packages/**",
+      "**/.tmp/**",
+      "**/electron/**",
+      "**/docs/**",
     ],
   },
   serverExternalPackages: [
@@ -274,6 +333,13 @@ const nextConfig = {
     // analysis can't follow _require.resolve("sql.js/package.json") and spams
     // build warnings.  Externalizing silences them without changing behaviour.
     "sql.js",
+    // tiktoken's node build reads tiktoken_bg.wasm via __dirname-relative
+    // fs.readFileSync at import time. When bundled, the wasm asset is not
+    // traced into the server chunk and page-data collection for any route
+    // importing the vendored ChatGPT Web tokenizer fails with
+    // "Missing tiktoken_bg.wasm". Externalizing keeps the require at runtime
+    // where node_modules/tiktoken/tiktoken_bg.wasm resolves normally.
+    "tiktoken",
     // sqlite-vec ships a native vec0.so loaded at runtime via createRequire().
     // Turbopack otherwise tries to bundle the .so and fails with "Unknown module
     // type"; externalizing it keeps the require at runtime (like better-sqlite3).
@@ -283,11 +349,12 @@ const nextConfig = {
     "keytar",
     "wreq-js",
     "zod",
-    "tls-client-node",
-    "koffi",
-    "tough-cookie",
     "@ngrok/ngrok",
     "@huggingface/transformers",
+    // The ESM entry imports tiktoken_bg.wasm as a module. Turbopack can compile
+    // that graph but omits the runtime asset, making provider routes fail during
+    // module evaluation. Keep Node's CommonJS loader and colocated WASM intact.
+    "tiktoken",
     // copilot-m365-web.ts imports 'ws' as a client-side WebSocket. When bundled,
     // ws cannot resolve its 'bufferutil' native addon (frame masking) and throws
     // TypeError: b.mask is not a function on the first outgoing frame, causing
@@ -315,11 +382,17 @@ const nextConfig = {
     // TODO: Re-enable after fixing all sub-component useTranslations scope issues
     ignoreBuildErrors: true,
   },
-  webpack(config, { webpack }) {
+  webpack(config, { dev, webpack }) {
     config.ignoreWarnings = [
       ...(config.ignoreWarnings || []),
       isNextIntlExtractorDynamicImportWarning,
     ];
+    const infrastructureLogging = config.infrastructureLogging || {};
+    config.infrastructureLogging = {
+      ...infrastructureLogging,
+      console: filterKnownInfrastructureWarnings(infrastructureLogging.console || console),
+    };
+    const nextDefaultSplitChunks = config.optimization?.splitChunks;
     config.optimization = config.optimization || {};
     config.optimization.splitChunks = {
       ...config.optimization.splitChunks,
@@ -378,6 +451,9 @@ const nextConfig = {
         },
       },
     };
+    // Next's development defaults are tuned for incremental route compilation.
+    // Retain the custom vendor topology for production without imposing it on dev.
+    if (dev) config.optimization.splitChunks = nextDefaultSplitChunks;
 
     if (isMinimalBuild) {
       // Mirror the turbopack.resolveAlias entries for webpack-built artifacts.

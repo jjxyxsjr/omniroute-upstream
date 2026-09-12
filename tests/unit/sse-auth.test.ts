@@ -20,7 +20,7 @@ const oauthOccupancy = await import("../../open-sse/services/oauthSessionOccupan
 async function resetStorage() {
   core.resetDbInstance();
   apiKeysDb.resetApiKeyState();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 }
 
@@ -72,7 +72,7 @@ test.beforeEach(async () => {
 test.after(async () => {
   core.resetDbInstance();
   apiKeysDb.resetApiKeyState();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 test("extractApiKey parses bearer headers and isValidApiKey validates persisted keys", async () => {
@@ -745,7 +745,7 @@ test("getProviderCredentials honors forcedConnectionId even when another account
   assert.equal(selected.apiKey, "sk-forced");
 });
 
-test("getProviderCredentials intersects forcedConnectionId with allowedConnections", async () => {
+test("getProviderCredentials refuses a forced pin outside allowedConnections instead of falling back (#12080)", async () => {
   const allowedConn = await seedConnection("openai", {
     name: "forced-allowed",
     apiKey: "sk-allowed",
@@ -765,12 +765,11 @@ test("getProviderCredentials intersects forcedConnectionId with allowedConnectio
     }
   );
 
-  // #8893: a forced pin outside the eligible pool is DROPPED (not honored) so a
-  // stale reset-aware pin cannot brick the request — selection falls back to the
-  // policy-allowed pool. The policy-blocked connection must never be selected.
-  assert.equal(selected.connectionId, allowedConn.id);
-  assert.equal(selected.apiKey, "sk-allowed");
-  assert.notEqual(selected.connectionId, blockedConn.id);
+  // #12080 (supersedes the #8893 fallback): a forced pin that is absent from the
+  // policy-allowed pool keeps its constraint — resolution yields no credential instead
+  // of silently continuing on another connection. The policy-blocked connection must
+  // never be selected, and the allowed one must not be picked behind the caller's back.
+  assert.equal(selected, null);
 });
 
 test("getProviderCredentials retains rate-limited accounts when allowSuppressedConnections is enabled", async () => {
@@ -1060,6 +1059,38 @@ test("getProviderCredentials least-used prefers the oldest timestamp when all ac
   const selected = await auth.getProviderCredentials("openai");
 
   assert.equal(selected.connectionId, oldest.id);
+});
+
+test("getProviderCredentials least-used prefers an account without backoff over the least recently used one (#12279)", async () => {
+  await settingsDb.updateSettings({ fallbackStrategy: "least-used" });
+  // Oldest lastUsedAt, but still carrying a backoff from a recent 429.
+  const backedOff = await seedConnection("openai", {
+    name: "least-used-backed-off",
+    priority: 1,
+  });
+  // Used more recently, but healthy.
+  const healthy = await seedConnection("openai", {
+    name: "least-used-healthy",
+    priority: 9,
+  });
+  // createProviderConnection does not persist backoffLevel; write it through
+  // update. rateLimitedUntil in the future keeps the backoff from auto-decaying,
+  // and allowRateLimitedConnections below keeps the account in the pool.
+  await providersDb.updateProviderConnection(backedOff.id, {
+    backoffLevel: 2,
+    rateLimitedUntil: futureIso(),
+    lastUsedAt: new Date(Date.now() - 120_000).toISOString(),
+  });
+  await providersDb.updateProviderConnection(healthy.id, {
+    lastUsedAt: new Date(Date.now() - 1_000).toISOString(),
+  });
+
+  const selected = await auth.getProviderCredentials("openai", null, null, null, {
+    allowRateLimitedConnections: true,
+  });
+
+  assert.equal(selected.connectionId, healthy.id);
+  assert.notEqual(selected.connectionId, backedOff.id);
 });
 
 test("getProviderCredentials cost-optimized selects the lowest priority account", async () => {

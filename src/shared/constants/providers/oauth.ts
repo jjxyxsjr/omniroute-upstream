@@ -7,6 +7,7 @@ import { GITLAB_DUO_OAUTH_SETUP_MESSAGE } from "@/shared/constants/gitlabDuoSetu
 export const OAUTH_PROVIDERS = {
   "ghe-copilot": {
     id: "ghe-copilot",
+    serviceKinds: ["llm"],
     alias: "ghe-copilot",
     name: "GitHub Enterprise Copilot",
     icon: "code",
@@ -18,6 +19,7 @@ export const OAUTH_PROVIDERS = {
   },
   "xai-oauth": {
     id: "xai-oauth",
+    serviceKinds: ["llm"],
     alias: "xao",
     name: "xAI OAuth (Grok)",
     icon: "auto_awesome",
@@ -34,6 +36,7 @@ export const OAUTH_PROVIDERS = {
   },
   openference: {
     id: "openference",
+    serviceKinds: ["llm"],
     alias: "of",
     name: "Openference",
     icon: "openference",
@@ -47,6 +50,7 @@ export const OAUTH_PROVIDERS = {
   },
   "grok-cli": {
     id: "grok-cli",
+    serviceKinds: ["llm"],
     alias: "gc",
     name: "Grok Build",
     icon: "bolt",
@@ -58,6 +62,7 @@ export const OAUTH_PROVIDERS = {
   },
   qoder: {
     id: "qoder",
+    serviceKinds: ["llm"],
     alias: "if",
     name: "Qoder",
     icon: "water_drop",
@@ -68,6 +73,7 @@ export const OAUTH_PROVIDERS = {
   },
   agy: {
     id: "agy",
+    serviceKinds: ["llm"],
     alias: "agy",
     name: "Antigravity CLI",
     icon: "terminal",
@@ -82,6 +88,7 @@ export const OAUTH_PROVIDERS = {
   },
   kiro: {
     id: "kiro",
+    serviceKinds: ["llm"],
     alias: "kr",
     name: "Kiro AI",
     icon: "psychology_alt",
@@ -94,6 +101,7 @@ export const OAUTH_PROVIDERS = {
   },
   "amazon-q": {
     id: "amazon-q",
+    serviceKinds: ["llm"],
     alias: "aq",
     name: "Amazon Q",
     icon: "cloud",
@@ -106,6 +114,7 @@ export const OAUTH_PROVIDERS = {
   },
   claude: {
     id: "claude",
+    serviceKinds: ["llm"],
     alias: "cc",
     name: "Claude Code",
     icon: "smart_toy",
@@ -115,6 +124,7 @@ export const OAUTH_PROVIDERS = {
   },
   antigravity: {
     id: "antigravity",
+    serviceKinds: ["llm"],
     alias: undefined,
     name: "Antigravity",
     icon: "rocket_launch",
@@ -124,6 +134,7 @@ export const OAUTH_PROVIDERS = {
   },
   codex: {
     id: "codex",
+    serviceKinds: ["llm"],
     alias: "cx",
     name: "OpenAI Codex",
     icon: "code",
@@ -131,9 +142,10 @@ export const OAUTH_PROVIDERS = {
     subscriptionRisk: true,
     riskNoticeVariant: "oauth",
   },
-  github: { id: "github", alias: "gh", name: "GitHub Copilot", icon: "code", color: "#333333" },
+  github: { id: "github", serviceKinds: ["llm"], alias: "gh", name: "GitHub Copilot", icon: "code", color: "#333333" },
   "gitlab-duo": {
     id: "gitlab-duo",
+    serviceKinds: ["llm"],
     alias: "gitlab-duo",
     name: "GitLab Duo",
     icon: "hub",
@@ -145,6 +157,7 @@ export const OAUTH_PROVIDERS = {
   },
   cursor: {
     id: "cursor",
+    serviceKinds: ["llm"],
     alias: "cu",
     name: "Cursor IDE",
     icon: "edit_note",
@@ -154,6 +167,7 @@ export const OAUTH_PROVIDERS = {
   },
   zed: {
     id: "zed",
+    serviceKinds: ["llm"],
     alias: "zd",
     name: "Zed IDE",
     icon: "code",
@@ -165,6 +179,7 @@ export const OAUTH_PROVIDERS = {
   },
   "zed-hosted": {
     id: "zed-hosted",
+    serviceKinds: ["llm"],
     alias: undefined,
     name: "Zed Hosted Models",
     icon: "code_blocks",
@@ -178,6 +193,7 @@ export const OAUTH_PROVIDERS = {
   },
   trae: {
     id: "trae",
+    serviceKinds: ["llm"],
     alias: "tr",
     name: "Trae",
     icon: "edit_square",
@@ -187,21 +203,9 @@ export const OAUTH_PROVIDERS = {
     authHint:
       "Trae is an AI-native IDE by ByteDance (SOLO remote agent). Authorize via trae.ai in the popup, or sign in at solo.trae.ai and paste the Cloud-IDE-JWT (sent as 'Authorization: Cloud-IDE-JWT <token>', ~14-day lifetime) as the access token; web_id/biz_user_id/user_unique_id/scope/tenant/region propagate via providerSpecificData. No headless refresh for pasted tokens — re-paste on expiry.",
   },
-  raycast: {
-    id: "raycast",
-    alias: "rc",
-    name: "Raycast Pro AI",
-    icon: "terminal",
-    color: "#FF6363",
-    textIcon: "RC",
-    website: "https://raycast.com/ai",
-    subscriptionRisk: true,
-    riskNoticeVariant: "oauth",
-    authHint:
-      "Unofficial integration — uses your Raycast Pro subscription via credentials from the macOS app (Auto-Import or manual capture). May break on Raycast updates. Not for redistribution; personal use only.",
-  },
   "kimi-coding": {
     id: "kimi-coding",
+    serviceKinds: ["llm"],
     alias: "kmc",
     name: "Kimi Code CLI",
     icon: "psychology",
@@ -217,6 +221,7 @@ export const OAUTH_PROVIDERS = {
   },
   kilocode: {
     id: "kilocode",
+    serviceKinds: ["llm"],
     alias: "kc",
     name: "Kilo Code",
     icon: "code",
@@ -231,6 +236,7 @@ export const OAUTH_PROVIDERS = {
   },
   cline: {
     id: "cline",
+    serviceKinds: ["llm"],
     alias: "cl",
     name: "Cline",
     icon: "smart_toy",
@@ -241,6 +247,7 @@ export const OAUTH_PROVIDERS = {
   },
   clinepass: {
     id: "clinepass",
+    serviceKinds: ["llm"],
     alias: "cp",
     name: "ClinePass",
     icon: "smart_toy",
@@ -254,6 +261,7 @@ export const OAUTH_PROVIDERS = {
   },
   "devin-desktop": {
     id: "devin-desktop",
+    serviceKinds: ["llm"],
     alias: undefined,
     name: "Devin Desktop",
     icon: "terminal",
@@ -267,6 +275,7 @@ export const OAUTH_PROVIDERS = {
   },
   "devin-cli": {
     id: "devin-cli",
+    serviceKinds: ["llm"],
     alias: "dv",
     name: "Devin CLI",
     icon: "terminal",
@@ -278,6 +287,7 @@ export const OAUTH_PROVIDERS = {
   },
   "codebuddy-cn": {
     id: "codebuddy-cn",
+    serviceKinds: ["llm"],
     alias: "cbcn",
     name: "CodeBuddy CN",
     icon: "smart_toy",

@@ -53,7 +53,7 @@ export async function getComboVisionBridgeDecision(
   model: string
 ): Promise<ComboVisionBridgeDecision> {
   try {
-    const { getComboByName } = await import("@/lib/localDb");
+    const { getComboByName } = await import("@/lib/db/combos");
     const { resolveComboForModel } = await import("@/lib/db/modelComboMappings");
 
     // 1. Try to find combo by exact name match
@@ -89,7 +89,16 @@ export async function getComboVisionBridgeDecision(
         hasModelStep = true;
         const targetModel = s.model;
         if (typeof targetModel === "string") {
-          const caps = getResolvedModelCapabilities(targetModel);
+          const provider =
+            typeof s.providerId === "string"
+              ? s.providerId
+              : typeof s.provider === "string"
+                ? s.provider
+                : null;
+          const caps = getResolvedModelCapabilities({
+            provider,
+            model: targetModel,
+          });
           if (caps.supportsVision === true) {
             hasVisionCapableStep = true;
           } else {

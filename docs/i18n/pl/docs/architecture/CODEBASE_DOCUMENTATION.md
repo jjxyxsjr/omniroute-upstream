@@ -234,7 +234,6 @@ v1/
 ├── audio/{speech, transcriptions}/      TTS + STT
 ├── batches/[id]/{cancel}, batches/      OpenAI Batches API
 ├── chat/completions/                    Chat Completions (główny endpoint)
-├── chatgpt-web/                         compat ChatGPT-Web
 ├── completions/                         Legacy text completions
 ├── embeddings/                          Embeddings
 ├── files/[id]/, files/                  Pliki API
@@ -317,7 +316,6 @@ Pliki najwyższego poziomu w `src/lib/`:
 
 - `localDb.ts` — wyłącznie warstwa re-export. **Nigdy** nie dodawaj tu logiki.
 - `proxyHealth.ts`, `proxyLogger.ts`, `tokenHealthCheck.ts`, `localHealthCheck.ts`
-- `oneproxyRotator.ts`, `oneproxySync.ts`
 - `apiBridgeServer.ts`, `cacheLayer.ts`, `semanticCache.ts`, `settingsCache.ts`
 - `cloudSync.ts`, `initCloudSync.ts`
 - `cloudflaredTunnel.ts`, `ngrokTunnel.ts`, `tailscaleTunnel.ts`
@@ -424,7 +422,7 @@ Podzielone na skupione podkatalogi:
   `bodySize.ts`, `colors.ts`, `appConfig.ts`, `config.ts`,
   `sidebarVisibility.ts`, `visionBridgeDefaults.ts`.
 - `validation/` — `schemas.ts` (~80 schematów Zod), `compressionConfigSchemas.ts`,
-  `oneproxySchemas.ts`, `providerSchema.ts`, `settingsSchemas.ts`, `helpers.ts`.
+  `providerSchema.ts`, `settingsSchemas.ts`, `helpers.ts`.
 - `contracts/` — publiczne kontrakty API dostarczane do npm.
 - `types/` — współdzielone typy TS.
 - `utils/` — `circuitBreaker.ts`, `apiAuth.ts`, `apiKey.ts`, `apiKeyPolicy.ts`,
@@ -482,16 +480,16 @@ open-sse/
 
 ### 4.2 `open-sse/executors/`
 
-84 executory providerów, każdy rozszerza `BaseExecutor` (`base.ts`):
+107 executorów providerów, każdy rozszerza `BaseExecutor` (`base.ts`):
 
-`antigravity`, `azure-openai`, `blackbox-web`, `chatgpt-web`, `cliproxyapi`,
-`cloudflare-ai`, `codex`, `commiCode`, `cursor`, `default`, `devin-cli`,
+`antigravity`, `azure-openai`, `blackbox-web`, `cliproxyapi`,
+`chatgpt-web-codex`, `cloudflare-ai`, `codex`, `commiCode`, `cursor`, `default`, `devin-cli`,
 `muse-spark-web`, `nlpcloud`, `opencode`, `perplexity-web`, `petals`,
 `pollinations`, `qoder`, `vertex`, `windsurf`, plus `claudeIdentity.ts`
 (współdzielony helper identity) i `index.ts` (rejestr).
 
 > Uwaga: providery niewymienione tutaj są obsługiwane przez `default.ts` z generycznym
-> executorem zgodnym z OpenAI. Pełny katalog providerów (329 wpisów) jest w
+> executorem zgodnym z OpenAI. Pełny katalog providerów (351 wpisów) jest w
 > `src/shared/constants/providers.ts`.
 
 ### 4.3 `open-sse/translator/`

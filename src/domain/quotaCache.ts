@@ -17,7 +17,8 @@
  */
 
 import { getUsageForProvider } from "@omniroute/open-sse/services/usage.ts";
-import { getCachedProviderConnectionById, resolveProxyForConnection } from "@/lib/localDb";
+import { getCachedProviderConnectionById } from "@/lib/db/readCache";
+import { resolveProxyForConnection } from "@/lib/db/settings";
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { safePercentage } from "@/shared/utils/formatting";
 import {
@@ -37,7 +38,8 @@ import {
   resolveCodexAccount,
   type CodexPersistedQuotaState,
 } from "@omniroute/open-sse/services/codexAccount/index.ts";
-import { getAntigravityQuotaFamily } from "@omniroute/open-sse/services/antigravityQuotaFamily.ts";
+import { selectAntigravityQuotaWindowNames } from "@omniroute/open-sse/services/antigravityQuotaFamily.ts";
+import { isClaudeExtraUsageAllowed } from "@/lib/providers/claudeExtraUsage";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -51,6 +53,8 @@ interface QuotaInfo {
   // percentage; `false` means "unknown", so callers must not treat the
   // defaulted-to-0 `remainingPercentage` as genuine exhaustion.
   fractionReported?: boolean;
+  displayName?: string;
+  windowSeconds?: number | null;
 }
 
 interface QuotaCacheEntry {
@@ -68,6 +72,14 @@ interface QuotaWindowStatus {
   usedPercentage: number;
   resetAt: string | null;
   reachedThreshold: boolean;
+  displayName?: string;
+  windowSeconds?: number | null;
+}
+
+export interface QuotaWindowObservation {
+  usedPercentage: number;
+  resetAt: string | null;
+  observedAt: string | null;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -242,6 +254,12 @@ function normalizeQuotas(rawQuotas: Record<string, any>): Record<string, QuotaIn
   const result: Record<string, QuotaInfo> = {};
   for (const [key, q] of Object.entries(rawQuotas)) {
     if (q && typeof q === "object") {
+      const windowSeconds =
+        typeof q.windowSeconds === "number" && Number.isFinite(q.windowSeconds)
+          ? q.windowSeconds
+          : typeof q.window_seconds === "number" && Number.isFinite(q.window_seconds)
+            ? q.window_seconds
+            : null;
       result[key] = {
         remainingPercentage:
           safePercentage(q.remainingPercentage) ??
@@ -250,6 +268,10 @@ function normalizeQuotas(rawQuotas: Record<string, any>): Record<string, QuotaIn
         // #10095 — thread through the "did upstream actually report this
         // window's fraction" signal (see UsageQuota in usage/quota.ts).
         fractionReported: q.fractionReported === false ? false : undefined,
+        ...(typeof q.displayName === "string" && q.displayName.trim()
+          ? { displayName: q.displayName.trim() }
+          : {}),
+        ...(windowSeconds != null ? { windowSeconds } : {}),
       };
     }
   }
@@ -266,37 +288,7 @@ function resolveAntigravityQuotaWindowsForModel(
   quotaNames: string[],
   requestedModel: string
 ): string[] {
-  const requestedFamily = getAntigravityQuotaFamily(requestedModel);
-  const cleanRequestedModel = requestedModel.replace(/^(antigravity|agy)\//, "");
-  const bareModel = cleanRequestedModel.includes("/")
-    ? cleanRequestedModel.slice(cleanRequestedModel.lastIndexOf("/") + 1)
-    : cleanRequestedModel;
-
-  if (requestedFamily === "other") {
-    return quotaNames.filter((windowName) => {
-      const bare = windowName.replace(/^(antigravity|agy)\//, "");
-      return bare === bareModel || bare === cleanRequestedModel;
-    });
-  }
-
-  const familyAggregates =
-    requestedFamily === "gemini"
-      ? ["gemini_weekly"]
-      : requestedFamily === "claude"
-        ? ["claude_gpt_weekly"]
-        : [];
-
-  const exactWindows = quotaNames.filter((windowName) => {
-    const bare = windowName.replace(/^(antigravity|agy)\//, "");
-    return bare === bareModel;
-  });
-  const aggregateWindows = familyAggregates.filter((key) => quotaNames.includes(key));
-  const scoped = [...exactWindows, ...aggregateWindows];
-  if (scoped.length > 0) return scoped;
-
-  return quotaNames.filter(
-    (windowName) => getAntigravityQuotaFamily(windowName) === requestedFamily
-  );
+  return selectAntigravityQuotaWindowNames(quotaNames, requestedModel);
 }
 
 function isAntigravityQuotaExhausted(
@@ -430,8 +422,10 @@ function isStandardQuotaExhausted(entry: QuotaCacheEntry, now: number): boolean 
 export function isQuotaExhaustedForRequest(
   connectionId: string,
   provider: string,
-  requestedModel: string | null = null
+  requestedModel: string | null = null,
+  providerSpecificData?: unknown
 ): boolean {
+  if (isClaudeExtraUsageAllowed(provider, providerSpecificData)) return false;
   const entry = getState().cache.get(connectionId) || hydrateQuotaCacheFromSnapshots(connectionId);
   if (!entry) return false;
 
@@ -662,6 +656,30 @@ export function getQuotaWindowStatus(
         : remainingPercentage <= 0
           ? true
           : usedPercentage >= thresholdPercent,
+    ...(window.displayName ? { displayName: window.displayName } : {}),
+    ...(window.windowSeconds != null ? { windowSeconds: window.windowSeconds } : {}),
+  };
+}
+
+/** Return the display-safe observation behind the routing decision for one quota window. */
+export function getQuotaWindowObservation(
+  connectionId: string,
+  windowName: string
+): QuotaWindowObservation | null {
+  const entry = getState().cache.get(connectionId) || hydrateQuotaCacheFromSnapshots(connectionId);
+  if (!entry) return null;
+
+  const window = resolveQuotaWindow(entry.quotas, windowName);
+  if (!window || window.fractionReported === false) return null;
+
+  const status = getQuotaWindowStatus(connectionId, windowName);
+  if (!status) return null;
+  const observedDate = new Date(entry.fetchedAt);
+
+  return {
+    usedPercentage: status.usedPercentage,
+    resetAt: status.resetAt,
+    observedAt: Number.isFinite(observedDate.getTime()) ? observedDate.toISOString() : null,
   };
 }
 

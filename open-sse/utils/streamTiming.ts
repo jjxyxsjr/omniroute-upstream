@@ -19,7 +19,19 @@
  *
  * The object is cheap to construct, plain mutable state, and safe under the
  * event loop's single thread (each stream owns its own instance).
+ *
+ * All timestamps are sampled from `performance.now()` (a monotonic clock,
+ * milliseconds since an arbitrary process-relative origin), NOT `Date.now()`
+ * (wall clock). Every field here is consumed only as an intra-instance delta
+ * (`ttftMs`, `avgItlMs`, `totalMs`), so a monotonic source keeps TTFT/ITL
+ * immune to NTP steps and wall-clock jumps that would otherwise poison the
+ * router's quality signals. Consequently these values are NOT epoch timestamps
+ * and must never be serialized, persisted, or compared across StreamTiming
+ * instances as absolute times — the same convention `earlyStreamKeepalive.ts`
+ * already follows on this streaming path.
  */
+import { attachTokensPerSecond, generationDurationMs } from "./generationThroughput.ts";
+
 export interface StreamTiming {
   startedAt: number;
   firstByteAt: number | null;
@@ -38,6 +50,10 @@ export interface StreamTiming {
   avgItlMs(): number | null;
   /** Time from stream start to completion (ms). */
   totalMs(): number;
+  /**
+   * Attach gateway-measured tok/s (TTFT excluded). No-op when TTFT is unknown.
+   */
+  withTps<T>(usage: T): T;
 }
 
 /** Max number of inter-chunk samples kept (bounds memory). */
@@ -45,7 +61,7 @@ const MAX_INTER_CHUNK_GAPS = 32;
 
 export function createStreamTiming(): StreamTiming {
   const timing: StreamTiming = {
-    startedAt: Date.now(),
+    startedAt: performance.now(),
     firstByteAt: null,
     firstForwardAt: null,
     lastForwardAt: null,
@@ -53,10 +69,10 @@ export function createStreamTiming(): StreamTiming {
     forwardedChunks: 0,
     interrupted: false,
     markByte() {
-      if (this.firstByteAt === null) this.firstByteAt = Date.now();
+      if (this.firstByteAt === null) this.firstByteAt = performance.now();
     },
     markForward() {
-      const now = Date.now();
+      const now = performance.now();
       if (this.firstForwardAt === null) this.firstForwardAt = now;
       if (this.lastForwardAt !== null && this.interChunkGaps.length < MAX_INTER_CHUNK_GAPS) {
         this.interChunkGaps.push(now - this.lastForwardAt);
@@ -76,7 +92,10 @@ export function createStreamTiming(): StreamTiming {
       return sum / this.interChunkGaps.length;
     },
     totalMs() {
-      return Date.now() - this.startedAt;
+      return performance.now() - this.startedAt;
+    },
+    withTps(usage) {
+      return attachTokensPerSecond(usage, generationDurationMs(this.totalMs(), this.ttftMs()));
     },
   };
   return timing;

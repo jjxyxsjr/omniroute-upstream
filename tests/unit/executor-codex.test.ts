@@ -184,10 +184,10 @@ test("CodexExecutor.buildHeaders binds workspace ids and disables SSE accept for
   assert.equal(standardHeaders.Authorization, "Bearer codex-token");
   assert.equal(standardHeaders.Accept, "text/event-stream");
   assert.equal(standardHeaders["chatgpt-account-id"], "workspace-1");
-  assert.equal(standardHeaders.Version, "0.149.0");
+  assert.equal(standardHeaders.Version, "0.153.2");
   assert.equal(standardHeaders["Openai-Beta"], "responses=experimental");
   assert.equal(standardHeaders["X-Codex-Beta-Features"], "responses_websockets");
-  assert.equal(standardHeaders["User-Agent"], "codex-cli/0.149.0 (Windows 10.0.26200; x64)");
+  assert.equal(standardHeaders["User-Agent"], "codex-cli/0.153.2 (Windows 10.0.26200; x64)");
   assert.equal(compactHeaders.Accept, "application/json");
 });
 
@@ -213,7 +213,7 @@ test("CodexExecutor.buildHeaders honors safe env overrides for Version and User-
     },
     () => {
       const headers = executor.buildHeaders({ accessToken: "codex-token" }, true);
-      assert.equal(headers.Version, "0.149.0");
+      assert.equal(headers.Version, "0.153.2");
       assert.equal(headers["User-Agent"], "custom-codex/9.9.9");
     }
   );
@@ -273,7 +273,6 @@ test("CodexExecutor.transformRequest non-passthrough allowlist strips all residu
     function_call: "auto",
     functions: [{ name: "test", parameters: {} }],
     max_completion_tokens: 1000,
-    parallel_tool_calls: true,
     user: "cursor-user",
     metadata: { key: "value" },
     stream_options: { include_usage: true },
@@ -310,7 +309,6 @@ test("CodexExecutor.transformRequest non-passthrough allowlist strips all residu
   assert.equal(result.function_call, undefined, "function_call should be stripped");
   assert.equal(result.functions, undefined, "functions should be stripped");
   assert.equal(result.max_completion_tokens, undefined, "max_completion_tokens should be stripped");
-  assert.equal(result.parallel_tool_calls, undefined, "parallel_tool_calls should be stripped");
   assert.equal(result.user, undefined, "user should be stripped");
   assert.equal(result.metadata, undefined, "metadata should be stripped");
   assert.equal(result.stream_options, undefined, "stream_options should be stripped");

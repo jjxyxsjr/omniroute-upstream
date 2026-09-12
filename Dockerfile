@@ -140,7 +140,8 @@ RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,targe
   && cp /tmp/tls-client-vendor/tls-client-*.so node_modules/tls-client-node/bin/ \
   && TLS_CLIENT_SKIP_DOWNLOAD=1 node node_modules/tls-client-node/scripts/postinstall.js \
   && (test -n "$(find node_modules/tls-client-node/bin -mindepth 1 -print -quit 2>/dev/null)" \
-      || (echo "tls-client-node native binary missing after postinstall — GitHub API fetch likely rate-limited or failed (#7802)" >&2 && exit 1))
+      || (echo "tls-client-node native binary missing after postinstall — GitHub API fetch likely rate-limited or failed (#7802)" >&2 && exit 1)) \
+  && node -e "const wreq=require('wreq-js'); if(typeof wreq.createTransport!=='function') process.exit(1)"
 
 # Build with Turbopack (stable in Next 16, the repo default). The v3.8.27-era
 # TurbopackInternalError panic ("entered unreachable code: there must be a path to a
@@ -200,10 +201,33 @@ ENV NODE_OPTIONS="--max-old-space-size=${OMNIROUTE_BUILD_MEMORY_MB}"
 # workers for page-data collection (31 on a 32-core builder); on memory-tight
 # hosts 31 workers + webpack's multi-GB heap blow past RAM and a worker dies
 # with SIGSEGV at teardown ("worker exited with code: null and signal: SIGSEGV"),
-# silently leaving no standalone bundle. Next derives the default worker count
-# from CIRCLE_NODE_TOTAL (workers = N-1), so N=8 → 7 workers: fast enough while
-# fitting comfortably in RAM on any host. (#10060)
-ENV CIRCLE_NODE_TOTAL=8
+# silently leaving no standalone bundle. Next derives the worker count from
+# CIRCLE_NODE_TOTAL (workers = N-1). (#10060)
+#
+# Lowered 8 → 3 (7 workers → 2) in #11419, then 3 → 2 (2 workers → 1) in #7518.
+# Every page-data worker inherits NODE_OPTIONS above, so the ceiling is per
+# PROCESS, not per build: 7 workers on a 16 GB GitHub runner (ubuntu-24.04 /
+# ubuntu-24.04-arm, 4 vCPU) exhausted the host and buildkit failed the whole
+# step with `ResourceExhausted: ... cannot allocate memory`. The compile phase
+# always finished ("✓ Compiled successfully in 4.2min"); the kernel killed the
+# build right after "Collecting page data using N workers".
+#
+# #11419's first fix (8 → 3) modeled the per-worker peak as an INFERENCE
+# (2560 MB, guessed from "7 workers didn't fit") and assumed the parent
+# process's RSS tracked the V8 heap ceiling. Both assumptions were wrong: a
+# live VPS reproduction (issue #7518, dmesg OOM-killer report) measured the
+# real per-process RSS directly at ~4.5 GB, independent of the NODE_OPTIONS
+# heap flag (Turbopack itself is native/Rust, outside the V8 heap) — and it
+# applies to the parent process too, not just workers. 2 workers (3 processes
+# × 4.5 GB = 13.5 GB) still didn't fit the 12.288 GB (75%) budget on a 16 GB
+# runner, matching the still-live publish failures after #11419 merged. 1
+# worker (2 processes × 4.5 GB = 9 GB) fits with headroom to spare.
+# tests/unit/docker-build-memory-budget.test.ts does the arithmetic against
+# the measured figure and fails if either knob is raised past what a 16 GB
+# runner holds. Override for a big builder: `--build-arg
+# OMNIROUTE_BUILD_WORKERS=8`.
+ARG OMNIROUTE_BUILD_WORKERS=2
+ENV CIRCLE_NODE_TOTAL=${OMNIROUTE_BUILD_WORKERS}
 
 COPY . ./
 # Workaround for the #11318 Docker-build regression on this tip: the compression
@@ -262,10 +286,6 @@ RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,targe
   && apt-get install -y --no-install-recommends git ca-certificates docker.io docker-compose \
   && rm -rf /var/lib/apt/lists/* \
   && git config --system url."https://github.com/".insteadOf "ssh://git@github.com/"
-
-# Install CLI tools globally. Separate layer from apt for better cache reuse.
-RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
-  npm install -g --no-audit --no-fund @openai/codex @anthropic-ai/claude-code droid openclaw@latest
 
 # `npm run build` (build-next-isolated → assembleStandalone) bundles ALL runtime
 # files into .build/next/standalone/ — .next, node_modules, migrations, scripts,
@@ -363,5 +383,28 @@ USER root
 # CDP without installing a second browser in this container.
 COPY --from=builder /app/node_modules/playwright-core ./node_modules/playwright-core
 COPY --from=builder /app/node_modules/playwright ./node_modules/playwright
+
+# Install system dependencies required by openclaw (git+ssh references).
+RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+  apt-get update \
+  && apt-get install -y --no-install-recommends git ca-certificates docker.io docker-compose \
+  && rm -rf /var/lib/apt/lists/* \
+  && git config --system url."https://github.com/".insteadOf "ssh://git@github.com/"
+
+# Install CLI tools globally. Separate layer from apt for better cache reuse.
+# Pinned to exact versions per Diego's diagnosis in #12576 — floating
+# `@latest` causes two CI failures:
+#   1. `openclaw` ships a breaking major ~weekly; overnight builds silently
+#      advance to a version that no longer matches the tested combo stack.
+#   2. `codex` / `claude-code` dev pre-releases (`@next`, dist-tags) mutate
+#      API surface without notice; reproducible builds need a SHA-pinned dev
+#      build, not the floating `@latest`.
+RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
+  npm install -g --no-audit --no-fund \
+    @openai/codex@0.153.2 \
+    @anthropic-ai/claude-code@2.1.260 \
+    droid@0.212.0 \
+    openclaw@2026.9.1
 
 USER node

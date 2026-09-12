@@ -41,6 +41,7 @@ import { errorResponseWithComboDiagnostics } from "../../utils/error.ts";
 import { getCircuitBreaker } from "../../../src/shared/utils/circuitBreaker";
 import type { ResilienceSettings } from "../../../src/lib/resilience/settings";
 import { applyStrategyOrdering } from "./applyStrategyOrdering.ts";
+import { expandTargetsForAllStrategies } from "./connectionAwareExpansion.ts";
 import { clampComboDepth } from "./comboPredicates.ts";
 import {
   checkRequestMediaGuardrails,
@@ -64,6 +65,7 @@ import {
   expandProviderWildcardsInCollection,
 } from "./providerWildcard.ts";
 import { preScreenTargets, type PreScreenResult } from "./quotaStrategies.ts";
+import { incrementInflight, decrementInflight } from "./quotaShareInflight.ts";
 import { resolveAutoStrategyOrder, type ResolveAutoStrategyDeps } from "./resolveAutoStrategy.ts";
 import {
   MAX_RR_COUNTERS,
@@ -123,6 +125,15 @@ export interface ResolvedComboTargetPipeline {
   /** Session-stickiness result — the attempt loop reads `.messageHash` on success/failure. */
   sticky: ApplyStickinessResult;
   preScreenMap: Map<string, PreScreenResult>;
+  /**
+   * Idempotent release for the in-flight slot reserved for the winner.
+   * Non-null for `quota-share` (reserved inside selectQuotaShareTarget) and for
+   * `quota-weighted` (reserved in the orderer on the draw). Stickiness/cache may
+   * still move [0]; this pipeline transfers the slot onto the dispatched account
+   * for both strategies. The host MUST invoke it when the request settles; this
+   * pipeline already releases it on any earlyResponse it produces after selection.
+   */
+  quotaShareRelease: (() => void) | null;
 }
 
 export type ResolveComboTargetPipelineResult =
@@ -395,7 +406,11 @@ async function orderByStrategy(
   initialOrderedTargets: ResolvedComboTarget[]
 ): Promise<
   | { earlyResponse: Response }
-  | { orderedTargets: ResolvedComboTarget[]; autoUsedExplicitRouter: boolean }
+  | {
+      orderedTargets: ResolvedComboTarget[];
+      autoUsedExplicitRouter: boolean;
+      quotaShareRelease: (() => void) | null;
+    }
 > {
   const { strategy, body, combo, settings, config, log } = deps;
   if (strategy === "auto") {
@@ -414,17 +429,22 @@ async function orderByStrategy(
     return {
       orderedTargets: autoResult.orderedTargets,
       autoUsedExplicitRouter: autoResult.autoUsedExplicitRouter,
+      quotaShareRelease: null,
     };
   }
-  const orderedTargets = await applyStrategyOrdering(strategy, initialOrderedTargets, {
-    combo,
-    config,
-    body,
-    log,
-    apiKeyAllowedConnections: deps.apiKeyAllowedConnections,
-    sessionKey: deps.relayOptions?.sessionId,
-  });
-  return { orderedTargets, autoUsedExplicitRouter: false };
+  const { orderedTargets, quotaShareRelease } = await applyStrategyOrdering(
+    strategy,
+    initialOrderedTargets,
+    {
+      combo,
+      config,
+      body,
+      log,
+      apiKeyAllowedConnections: deps.apiKeyAllowedConnections,
+      sessionKey: deps.relayOptions?.sessionId,
+    }
+  );
+  return { orderedTargets, autoUsedExplicitRouter: false, quotaShareRelease };
 }
 
 /**
@@ -700,7 +720,7 @@ async function applyPromptCacheStage(
 export async function resolveComboTargetPipeline(
   deps: ResolveComboTargetPipelineDeps
 ): Promise<ResolveComboTargetPipelineResult> {
-  const { body, combo, strategy, config, allCombos, log, isModelAvailable } = deps;
+  const { body, combo, strategy, config, allCombos, log, isModelAvailable, settings } = deps;
 
   const { expandedCombo, expandedAllCombos } = await expandComboWildcards(combo, allCombos);
   const stickyWeightedLimit = clampStickyWeightedTargetLimit(
@@ -725,6 +745,21 @@ export async function resolveComboTargetPipeline(
 
   orderedTargets = await applyRequestTagRouting(orderedTargets, body, log);
 
+  // Connection-aware expansion for group-B strategies is opt-in. Runs
+  // BEFORE orderByStrategy so every downstream consumer (strategy ordering,
+  // continuity/stickiness, prompt-cache stage) sees per-connection targets.
+  // Stickiness is applied later inside applyContinuityFilters, so its pin key
+  // naturally matches the expanded connectionId targets.
+  orderedTargets = await expandTargetsForAllStrategies({
+    strategy,
+    targets: orderedTargets,
+    comboName: combo.name,
+    config: combo.config,
+    settings: settings as Record<string, unknown> | null | undefined,
+    log,
+    apiKeyAllowedConnectionIds: deps.apiKeyAllowedConnections,
+  });
+
   logTargetPoolSize(strategy, allCombos, orderedTargets, stickyWeightedKey, log);
 
   const pipelineResponse = await dispatchSmartPipeline(
@@ -736,9 +771,16 @@ export async function resolveComboTargetPipeline(
   const ordering = await orderByStrategy(deps, orderedTargets);
   if ("earlyResponse" in ordering) return ordering;
   const { autoUsedExplicitRouter } = ordering;
+  let { quotaShareRelease } = ordering;
+  const drawnId = ordering.orderedTargets[0]?.connectionId ?? "";
 
   const continuity = await applyContinuityFilters(deps, ordering.orderedTargets);
-  if ("earlyResponse" in continuity) return continuity;
+  if ("earlyResponse" in continuity) {
+    // #11371: selection already reserved the winner's in-flight slot; a hard
+    // filter exhausting the pool must not leak it.
+    quotaShareRelease?.();
+    return continuity;
+  }
   orderedTargets = applyTaskAwareOrdering(deps, continuity.orderedTargets, autoUsedExplicitRouter);
   orderedTargets = await applyPromptCacheStage(
     deps,
@@ -746,6 +788,35 @@ export async function resolveComboTargetPipeline(
     continuity.sticky.stuck,
     autoUsedExplicitRouter
   );
+
+  // quota-weighted reserves the draw inside the orderer (same synchronous
+  // turn as the pick). quota-share reserves inside selectQuotaShareTarget.
+  // Stickiness / prompt-cache may still move [0]; transfer the slot so the
+  // reserved account is the one that will be dispatched. The empty-id
+  // fallback (drawn target had no connectionId, later filters put a real
+  // id in [0]) is quota-weighted only — quota-share always hands back a
+  // release, even a no-op, and inventing a slot here would double-count.
+  if (strategy === "quota-weighted" || strategy === "quota-share") {
+    const finalId = orderedTargets[0]?.connectionId ?? "";
+    if (quotaShareRelease && drawnId && finalId && finalId !== drawnId) {
+      quotaShareRelease();
+      incrementInflight(finalId);
+      let released = false;
+      quotaShareRelease = () => {
+        if (released) return;
+        released = true;
+        decrementInflight(finalId);
+      };
+    } else if (strategy === "quota-weighted" && !quotaShareRelease && finalId) {
+      incrementInflight(finalId);
+      let released = false;
+      quotaShareRelease = () => {
+        if (released) return;
+        released = true;
+        decrementInflight(finalId);
+      };
+    }
+  }
 
   // Parallel pre-screen: check provider profiles and model availability for all targets
   // Only runs for priority strategy where sequential checking causes latency
@@ -762,5 +833,6 @@ export async function resolveComboTargetPipeline(
     getWeightedStepKeyForTarget,
     sticky: continuity.sticky,
     preScreenMap,
+    quotaShareRelease,
   };
 }

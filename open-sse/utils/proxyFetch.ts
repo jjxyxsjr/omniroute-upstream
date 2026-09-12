@@ -106,6 +106,24 @@ function tlsFingerprintProviderAllowed(
     .some((candidate) => candidate.trim().toLowerCase() === normalizedProvider);
 }
 
+/**
+ * Per-provider TLS impersonation profile. Most providers use the default
+ * Chrome/macOS wreq profile; providers that must match a specific browser
+ * fingerprint (e.g. MaxAI expects a Windows Firefox-150 client) override it here.
+ * Returns undefined to keep the tlsClient default (chrome_124 / macos).
+ */
+const TLS_PROVIDER_PROFILE: Record<string, { browser: string; os: string }> = {
+  maxai: { browser: "firefox_150", os: "windows" },
+};
+
+function tlsProfileForProvider(
+  provider: string | null | undefined
+): { browserProfile?: string; os?: string } {
+  if (!provider) return {};
+  const p = TLS_PROVIDER_PROFILE[provider.trim().toLowerCase()];
+  return p ? { browserProfile: p.browser, os: p.os } : {};
+}
+
 type TlsClientLike = {
   available: boolean;
   fetch: (url: string, options?: TlsFetchOptions) => Promise<Response>;
@@ -358,10 +376,7 @@ function sanitizeTransportError(
     typeof source.code === "string" && /^[A-Z0-9_:-]{1,64}$/.test(source.code)
       ? source.code
       : fallbackCode;
-  if (
-    typeof source.errorCode === "string" &&
-    /^[a-zA-Z0-9_:-]{1,64}$/.test(source.errorCode)
-  ) {
+  if (typeof source.errorCode === "string" && /^[a-zA-Z0-9_:-]{1,64}$/.test(source.errorCode)) {
     sanitized.errorCode = source.errorCode;
   }
   if (typeof source.statusCode === "number" && Number.isFinite(source.statusCode)) {
@@ -554,10 +569,7 @@ export function resolveProxyForRequest(targetUrl) {
  * Dependency-internal TimeoutError/AbortError values are transport failures and
  * retain the normal safe-method fallback behavior.
  */
-function isCallerAbort(
-  _error: unknown,
-  signal: AbortSignal | null | undefined
-): boolean {
+function isCallerAbort(_error: unknown, signal: AbortSignal | null | undefined): boolean {
   return signal?.aborted === true;
 }
 
@@ -580,8 +592,7 @@ export async function runWithProxyContext(
   // sentinel must remain direct without being mistaken for a proxy config.
   const currentContext = proxyContext.getStore();
   const inheritsDirect = currentContext === DIRECT_PROXY_CONTEXT && !proxyConfig;
-  const effectiveProxyConfig =
-    proxyConfig || (inheritsDirect ? null : currentContext) || null;
+  const effectiveProxyConfig = proxyConfig || (inheritsDirect ? null : currentContext) || null;
   const contextValue = inheritsDirect ? DIRECT_PROXY_CONTEXT : effectiveProxyConfig;
 
   const resolvedProxyUrl = effectiveProxyConfig ? proxyConfigToUrl(effectiveProxyConfig) : null;
@@ -718,6 +729,21 @@ export async function runWithProxyContext(
   });
 }
 
+/** Run a request with an explicit direct-egress sentinel, bypassing proxy env/context lookup. */
+export function runWithDirectFetchContext<T>(fn: () => T): T {
+  return proxyContext.run(DIRECT_PROXY_CONTEXT, fn);
+}
+
+/**
+ * True when the caller already runs inside an explicit proxy context — i.e. an
+ * outer runWithProxyContext(proxyConfig, ...) pinned a proxy for this async
+ * scope. False for an empty store and for the direct sentinel.
+ */
+export function hasAmbientProxyContext(): boolean {
+  const store = proxyContext.getStore();
+  return Boolean(store) && store !== DIRECT_PROXY_CONTEXT;
+}
+
 /**
  * Like {@link runWithProxyContext}, but if the assigned proxy is unreachable or fails
  * its pre-checks the request can degrade to a DIRECT connection instead of throwing.
@@ -739,6 +765,12 @@ async function patchedFetch(
   options: FetchWithDispatcherOptions = {},
   deps: ProxyFetchDeps = {}
 ) {
+  // Explicit direct contexts must win even when a caller supplied a stale
+  // dispatcher. Native fetch preserves direct streaming semantics.
+  if (proxyContext.getStore() === DIRECT_PROXY_CONTEXT) {
+    return originalFetch(input, options);
+  }
+
   if (options?.dispatcher) {
     // When a dispatcher is present, we MUST use the undici library fetch
     // to ensure version compatibility. Node 22 built-in fetch (undici v6)
@@ -779,6 +811,7 @@ async function patchedFetch(
           signal: getEffectiveSignal(input, options),
           proxy: null,
           sessionScope: tlsStore?.sessionScope,
+          ...tlsProfileForProvider(tlsStore?.provider),
         });
         if (tlsStore) tlsStore.used = true;
         return response;
@@ -1094,6 +1127,7 @@ async function patchedFetch(
         signal: getEffectiveSignal(input, options),
         proxy: proxyUrl,
         sessionScope: tlsStore?.sessionScope,
+        ...tlsProfileForProvider(tlsStore?.provider),
       });
       if (tlsStore) tlsStore.used = true;
       return response;
@@ -1163,9 +1197,7 @@ async function patchedFetch(
       );
       const sanitized = sanitizeTransportError(
         error,
-        originalMsg
-          ? `Proxy request failed: ${originalMsg}`
-          : "Proxy request failed",
+        originalMsg ? `Proxy request failed: ${originalMsg}` : "Proxy request failed",
         "PROXY_REQUEST_FAILED"
       );
       console.error(
@@ -1220,8 +1252,7 @@ export async function runWithTlsTracking<T>(
   providerOrIdentityOrFn: string | null | undefined | TlsTrackingIdentity | (() => T),
   maybeFn?: () => T
 ): Promise<{ result: Awaited<T>; tlsFingerprintUsed: boolean }> {
-  const legacyFn =
-    typeof providerOrIdentityOrFn === "function" ? providerOrIdentityOrFn : maybeFn;
+  const legacyFn = typeof providerOrIdentityOrFn === "function" ? providerOrIdentityOrFn : maybeFn;
   if (typeof legacyFn !== "function") {
     throw new TypeError("runWithTlsTracking requires a callback function");
   }
@@ -1231,8 +1262,7 @@ export async function runWithTlsTracking<T>(
     typeof providerOrIdentityOrFn !== "function"
       ? providerOrIdentityOrFn
       : {
-          provider:
-            typeof providerOrIdentityOrFn === "string" ? providerOrIdentityOrFn : undefined,
+          provider: typeof providerOrIdentityOrFn === "string" ? providerOrIdentityOrFn : undefined,
         };
   const store: TlsFingerprintStore = {
     used: false,
@@ -1244,10 +1274,7 @@ export async function runWithTlsTracking<T>(
 }
 
 /** Check whether TLS fingerprint transport is enabled for this route identity. */
-export function isTlsFingerprintActive(
-  provider?: string | null,
-  proxied = false
-): boolean {
+export function isTlsFingerprintActive(provider?: string | null, proxied = false): boolean {
   return (
     isTlsFingerprintEnabled() &&
     activeTlsClient.available &&

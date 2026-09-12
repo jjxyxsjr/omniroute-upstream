@@ -31,6 +31,7 @@ import { UsageLimitSettings } from "./components/UsageLimitSettings";
 import { ChaosModeAccessToggle } from "./components/ChaosModeAccessToggle";
 import { BypassProviderQuotaToggle } from "./components/BypassProviderQuotaToggle";
 import { ApiKeyCompressionToggle } from "./components/ApiKeyCompressionToggle";
+import { AllowedCombosSection } from "./components/AllowedCombosSection";
 import ProviderModelPermissionList from "./components/ProviderModelPermissionList";
 import ReasoningRoutingRules from "@/shared/components/ReasoningRoutingRules";
 import { ALL_COMBOS_ACCESS_RULE } from "@/shared/constants/comboAccess";
@@ -264,13 +265,6 @@ export default function ApiManagerPageClient() {
   }, [newKeyNameInputId]);
 
   useEffect(() => {
-    fetchData();
-    fetchModels();
-    fetchCombos();
-    fetchConnections();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- initial dashboard load only
-
-  useEffect(() => {
     if (!showAddModal || !nameError) return;
     requestAnimationFrame(() => {
       createKeyNameFieldRef.current?.scrollIntoView({ block: "center", behavior: "instant" });
@@ -278,7 +272,12 @@ export default function ApiManagerPageClient() {
   }, [nameError, showAddModal]);
 
   useEffect(() => {
-    setActiveOnly(readActiveOnlyPreference());
+    // Hydrate the persisted preference after mount, behind an async boundary
+    // (react-hooks/set-state-in-effect) — same post-hydration timing as before.
+    void (async () => {
+      await Promise.resolve();
+      setActiveOnly(readActiveOnlyPreference());
+    })();
   }, []);
 
   useEffect(() => {
@@ -424,25 +423,6 @@ export default function ApiManagerPageClient() {
     }
   };
 
-  const fetchData = async () => {
-    try {
-      const res = await fetch("/api/keys");
-      if (res.ok) {
-        const data = await res.json();
-        setKeys(data.keys || []);
-        setAllowKeyReveal(data.allowKeyReveal === true);
-        // Fetch usage stats after keys are loaded
-        fetchUsageStats(data.keys || []);
-        fetchSessionCounts(data.keys || []);
-        fetchDeviceCounts(data.keys || []);
-      }
-    } catch (error) {
-      console.log("Error fetching keys:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const fetchUsageStats = async (apiKeys: ApiKey[]) => {
     if (apiKeys.length === 0) return;
     try {
@@ -544,6 +524,37 @@ export default function ApiManagerPageClient() {
       console.log("Error fetching device counts:", error);
     }
   };
+
+  // fetchData calls the three per-key fetchers above — declared after them so the
+  // calls are not TDZ reads (react-hooks/immutability).
+  const fetchData = async () => {
+    try {
+      const res = await fetch("/api/keys");
+      if (res.ok) {
+        const data = await res.json();
+        setKeys(data.keys || []);
+        setAllowKeyReveal(data.allowKeyReveal === true);
+        // Fetch usage stats after keys are loaded
+        fetchUsageStats(data.keys || []);
+        fetchSessionCounts(data.keys || []);
+        fetchDeviceCounts(data.keys || []);
+      }
+    } catch (error) {
+      console.log("Error fetching keys:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Initial dashboard load — placed after the fetcher declarations so the effect does
+  // not read them in their TDZ (react-hooks/immutability), behind an async boundary
+  // (react-hooks/set-state-in-effect).
+  useEffect(() => {
+    void (async () => {
+      await Promise.all([fetchData(), fetchModels(), fetchCombos(), fetchConnections()]);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- initial dashboard load only
+  }, []);
 
   const clearPageError = useCallback(() => setPageError(null), []);
 
@@ -807,7 +818,8 @@ export default function ApiManagerPageClient() {
     weeklyUsageLimitUsd: number | null,
     blockedModels: string[],
     chaosModeEnabled: boolean,
-    modelAccessMode: "all" | "restricted"
+    modelAccessMode: "all" | "restricted",
+    connectionAccessMode?: "all" | "restricted"
   ) => {
     if (!editingKey || !editingKey.id) return;
 
@@ -858,6 +870,7 @@ export default function ApiManagerPageClient() {
         body: JSON.stringify({
           name: sanitizedName,
           modelAccessMode,
+          connectionAccessMode,
           allowedModels: validModels,
           blockedModels: validBlockedModels,
           allowedCombos: validCombos,
@@ -1099,6 +1112,8 @@ export default function ApiManagerPageClient() {
                 !key.allowedCombos.includes(ALL_COMBOS_ACCESS_RULE);
               const hasConnectionRestrictions =
                 Array.isArray(key.allowedConnections) && key.allowedConnections.length > 0;
+              const hasExclusiveLeaseScope =
+                Array.isArray(key.scopes) && key.scopes.includes("lease:exclusive");
               const noLogEnabled = key.noLog === true;
               const keyIsActive = key.isActive !== false; // default true
               const throttleDelayMs =
@@ -1218,6 +1233,17 @@ export default function ApiManagerPageClient() {
                         >
                           <span className="material-symbols-outlined text-[14px]">cable</span>
                           {key.allowedConnections!.length} conn
+                        </button>
+                      )}
+                      {hasExclusiveLeaseScope && (
+                        <button
+                          onClick={() => handleOpenPermissions(key)}
+                          className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-purple-500/10 text-purple-600 dark:text-purple-400 text-xs font-medium hover:bg-purple-500/20 transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">
+                            key_vertical
+                          </span>
+                          {t("exclusiveLease")}
                         </button>
                       )}
                       {hasComboRestrictions && (
@@ -1714,7 +1740,8 @@ const PermissionsModal = memo(function PermissionsModal({
     weeklyUsageLimitUsd: number | null,
     blockedModels: string[],
     chaosModeEnabled: boolean,
-    modelAccessMode: "all" | "restricted"
+    modelAccessMode: "all" | "restricted",
+    connectionAccessMode?: "all" | "restricted"
   ) => void;
 }) {
   const t = useTranslations("apiManager");
@@ -1722,9 +1749,12 @@ const PermissionsModal = memo(function PermissionsModal({
 
   // Initialize state from props - component remounts when key prop changes
   const initialModels = Array.isArray(apiKey?.allowedModels) ? apiKey.allowedModels : [];
+  // Destructured to a local so the memo dep matches what the compiler infers
+  // (react-hooks/preserve-manual-memoization).
+  const blockedModelsProp = apiKey?.blockedModels;
   const initialBlockedModels = useMemo(
-    () => (Array.isArray(apiKey?.blockedModels) ? apiKey.blockedModels : []),
-    [apiKey?.blockedModels]
+    () => (Array.isArray(blockedModelsProp) ? blockedModelsProp : []),
+    [blockedModelsProp]
   );
   const initialCombos = Array.isArray(apiKey?.allowedCombos)
     ? apiKey.allowedCombos.filter((combo) => combo !== ALL_COMBOS_ACCESS_RULE)
@@ -1732,7 +1762,9 @@ const PermissionsModal = memo(function PermissionsModal({
   const initialConnections = Array.isArray(apiKey?.allowedConnections)
     ? apiKey.allowedConnections
     : [];
-  const [keyName, setKeyName] = useState(apiKey?.name ?? "");
+  const hasExclusiveLeaseScope =
+    Array.isArray(apiKey?.scopes) && apiKey.scopes.includes("lease:exclusive");
+  const [keyName, setKeyName] = useState(apiKey?.name || "");
   const [selectedModels, setSelectedModels] = useState<string[]>(initialModels);
   const [blockedClaudeCodeFamilies, setBlockedClaudeCodeFamilies] = useState<
     ClaudeCodeBlockableFamilyId[]
@@ -1959,6 +1991,11 @@ const PermissionsModal = memo(function PermissionsModal({
       return;
     }
 
+    // Validate connections selection when restricted
+    if (!allowAllConnections && selectedConnections.length === 0) {
+      setSaveError(t("selectAtLeastOneConnection"));
+      return;
+    }
     const schedule: AccessSchedule | null = scheduleEnabled
       ? {
           enabled: true,
@@ -2009,7 +2046,8 @@ const PermissionsModal = memo(function PermissionsModal({
       parseUsdLimitInput(weeklyUsageLimitUsd),
       blockedModels,
       chaosModeEnabled,
-      modelAccess.modelAccessMode
+      modelAccess.modelAccessMode,
+      allowAllConnections ? "all" : "restricted"
     );
   }, [
     onSave,
@@ -2056,8 +2094,12 @@ const PermissionsModal = memo(function PermissionsModal({
 
   // Provider wildcards ("ollama-cloud/*") are counted as providers, not models.
   // Inherited children render selected via the owner lookup inside the list component.
-  const { providerWildcards: selectedProviderScopes, exactModels: selectedExactModels } =
-    restoreProviderScopeSelection(selectedModels);
+  // Memoized so downstream memos see a stable, non-mutated dependency
+  // (react-hooks/preserve-manual-memoization).
+  const { providerWildcards: selectedProviderScopes, exactModels: selectedExactModels } = useMemo(
+    () => restoreProviderScopeSelection(selectedModels),
+    [selectedModels]
+  );
   const selectedProviderCount = selectedProviderScopes.length;
   const selectedModelCount = selectedExactModels.length;
   const selectedCount = selectedModels.length;
@@ -2866,6 +2908,19 @@ const PermissionsModal = memo(function PermissionsModal({
           />
         )}
 
+        {/* Exclusive Lease Notice */}
+        {hasExclusiveLeaseScope && (
+          <div className="flex flex-col gap-1 p-3 rounded-lg border border-purple-500/30 bg-purple-500/10">
+            <div className="flex items-center gap-1.5 text-purple-700 dark:text-purple-300 font-medium text-sm">
+              <span className="material-symbols-outlined text-[16px]">key_vertical</span>
+              {t("exclusiveLeaseNoticeTitle")}
+            </div>
+            <p className="text-xs text-purple-600/80 dark:text-purple-400/80">
+              {t("exclusiveLeaseNoticeDesc")}
+            </p>
+          </div>
+        )}
+
         {/* Allowed Connections Section */}
         {allConnections.length > 0 && (
           <div className="flex flex-col gap-2 p-3 rounded-lg border border-border bg-surface/40">
@@ -2873,6 +2928,7 @@ const PermissionsModal = memo(function PermissionsModal({
               <p className="text-sm font-medium text-text-main">{t("allowedConnections")}</p>
               <div className="flex gap-1 p-0.5 bg-surface rounded-md">
                 <button
+                  type="button"
                   onClick={() => {
                     setAllowAllConnections(true);
                     setSelectedConnections([]);
@@ -2883,9 +2939,10 @@ const PermissionsModal = memo(function PermissionsModal({
                       : "text-text-muted hover:bg-black/5 dark:hover:bg-white/5"
                   }`}
                 >
-                  All
+                  {t("allConnections")}
                 </button>
                 <button
+                  type="button"
                   onClick={() => setAllowAllConnections(false)}
                   className={`px-2 py-1 rounded text-xs font-medium transition-all ${
                     !allowAllConnections
@@ -2893,14 +2950,16 @@ const PermissionsModal = memo(function PermissionsModal({
                       : "text-text-muted hover:bg-black/5 dark:hover:bg-white/5"
                   }`}
                 >
-                  Restrict
+                  {t("onlySelectedConnections")}
                 </button>
               </div>
             </div>
             <p className="text-xs text-text-muted">
               {allowAllConnections
-                ? "This key can use any active connection."
-                : `Restricted to ${selectedConnections.length} connection${selectedConnections.length !== 1 ? "s" : ""}.`}
+                ? t("allConnectionsDesc")
+                : selectedConnections.length === 0
+                  ? t("selectAtLeastOneConnection")
+                  : t("restrictedToConnections", { count: selectedConnections.length })}
             </p>
             {!allowAllConnections && (
               <div className="flex flex-col gap-1 max-h-40 overflow-y-auto">
@@ -2960,82 +3019,17 @@ const PermissionsModal = memo(function PermissionsModal({
         )}
 
         {/* Allowed Combos Section */}
-        {allCombos.length > 0 && (
-          <div className="flex flex-col gap-2 p-3 rounded-lg border border-border bg-surface/40">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-medium text-text-main">{t("allowedCombos")}</p>
-              <div className="flex gap-1 p-0.5 bg-surface rounded-md">
-                <button
-                  onClick={() => {
-                    setAllowAllCombos(true);
-                    setSelectedCombos([]);
-                  }}
-                  className={`px-2 py-1 rounded text-xs font-medium transition-all ${
-                    allowAllCombos
-                      ? "bg-primary text-white"
-                      : "text-text-muted hover:bg-black/5 dark:hover:bg-white/5"
-                  }`}
-                >
-                  {tc("all")}
-                </button>
-                <button
-                  onClick={() => setAllowAllCombos(false)}
-                  className={`px-2 py-1 rounded text-xs font-medium transition-all ${
-                    !allowAllCombos
-                      ? "bg-primary text-white"
-                      : "text-text-muted hover:bg-black/5 dark:hover:bg-white/5"
-                  }`}
-                >
-                  {t("restrict")}
-                </button>
-              </div>
-            </div>
-            <p className="text-xs text-text-muted">
-              {allowAllCombos
-                ? t("allCombosAllowed")
-                : t("restrictedComboCount", { count: selectedCombos.length })}
-            </p>
-            {!allowAllCombos && (
-              <div className="flex flex-col gap-1 max-h-40 overflow-y-auto">
-                {allCombos
-                  .slice()
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((combo) => {
-                    const isSelected = selectedCombos.includes(combo.name);
-                    return (
-                      <button
-                        key={combo.id || combo.name}
-                        onClick={() => handleToggleCombo(combo.name)}
-                        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-xs transition-all ${
-                          isSelected
-                            ? "bg-primary/10 text-primary"
-                            : "text-text-muted hover:bg-surface/50 hover:text-text-main"
-                        }`}
-                      >
-                        <div
-                          className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
-                            isSelected ? "bg-primary border-primary" : "border-border"
-                          }`}
-                        >
-                          {isSelected && (
-                            <span className="material-symbols-outlined text-white text-[10px]">
-                              check
-                            </span>
-                          )}
-                        </div>
-                        <span className="truncate flex-1">{combo.name}</span>
-                        {Array.isArray(combo.models) && (
-                          <span className="text-[10px] text-text-muted shrink-0">
-                            {combo.models.length} models
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-              </div>
-            )}
-          </div>
-        )}
+        <AllowedCombosSection
+          allCombos={allCombos}
+          allowAllCombos={allowAllCombos}
+          selectedCombos={selectedCombos}
+          onAllowAll={(preservedRules) => {
+            setAllowAllCombos(true);
+            setSelectedCombos(preservedRules);
+          }}
+          onRestrict={() => setAllowAllCombos(false)}
+          onToggleCombo={handleToggleCombo}
+        />
 
         {/* Allowed Endpoints Section */}
         <div className="flex flex-col gap-2 p-3 rounded-lg border border-border bg-surface/40">

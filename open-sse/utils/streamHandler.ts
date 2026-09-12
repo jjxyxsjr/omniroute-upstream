@@ -1,6 +1,7 @@
 import { trackPendingRequest } from "@/lib/usageDb";
 import { STREAM_IDLE_TIMEOUT_MS } from "../config/constants.ts";
 import { FORMATS } from "../translator/formats.ts";
+import { buildErrorBody } from "./error.ts";
 import { PENDING_REQUEST_CLEARED_MARKER } from "./stream.ts";
 import { createCompletedResponsesToolHandoffWatcher } from "./responsesToolHandoff.ts";
 import { createStreamContentWatcher, type StreamContentWatcher } from "./streamReadiness.ts";
@@ -153,7 +154,7 @@ function isPendingRequestClearedError(error: unknown): boolean {
  * chunk into the now-closed response stream, as a "Controller is already closed"
  * TypeError. Treating any of these as an upstream error wrongly cools down the
  * account/connection, so the stream error path uses this to skip the provider
- * failover/cooldown (the chatgpt-web / codex / antigravity executors already
+ * failover/cooldown (the Codex / Antigravity executors already
  * guard client aborts the same way).
  */
 export function isClientDisconnectError(error: unknown): boolean {
@@ -185,6 +186,10 @@ function getErrorStatusCode(error: unknown): number {
     }
   }
   return 502;
+}
+
+function getPublicErrorMessage(errorMsg: string, statusCode: number): string {
+  return buildErrorBody(statusCode, errorMsg).error.message;
 }
 
 function isDeadlineAbortReason(reason: unknown): reason is Error {
@@ -406,7 +411,7 @@ export function createStreamController({
       }
 
       if (error instanceof Error) {
-        logStream(`error: ${error.message}`);
+        logStream(`error: ${getPublicErrorMessage(error.message, getErrorStatusCode(error))}`);
         return;
       }
       logStream("error: unknown");
@@ -452,6 +457,7 @@ export function buildStreamErrorChunks(
   clientResponseFormat?: string | null
 ) {
   const statusMapping = getStreamErrorStatusMapping(statusCode);
+  const publicErrorMessage = getPublicErrorMessage(errorMsg, statusCode);
 
   if (isResponsesClientFormat(clientResponseFormat)) {
     const errorEvent = {
@@ -460,7 +466,7 @@ export function buildStreamErrorChunks(
         id: null,
         status: "failed",
         error: {
-          message: errorMsg,
+          message: publicErrorMessage,
           type: statusMapping.responses.type,
           code: statusMapping.responses.code,
         },
@@ -475,7 +481,7 @@ export function buildStreamErrorChunks(
       type: "error",
       error: {
         type: statusMapping.claude.type,
-        message: errorMsg,
+        message: publicErrorMessage,
       },
     };
 
@@ -498,7 +504,7 @@ export function buildStreamErrorChunks(
       },
     ],
     error: {
-      message: errorMsg,
+      message: publicErrorMessage,
       type: statusMapping.responses.type,
       code: statusMapping.responses.code,
     },
@@ -599,7 +605,7 @@ function resolveSilentCloseOutcome(input: {
     // #10443: every known path that produces OpenAI chat chunks emits a
     // terminal — the response translators (gemini/claude/kiro/cursor-to-openai)
     // all emit a finish_reason chunk, the non-standard executors (kiro, cursor,
-    // nlpcloud, poe-web, copilot-m365-web, chatgpt-web, chipotle, gitlab)
+    // nlpcloud, poe-web, copilot-m365-web, chipotle, gitlab)
     // enqueue `data: [DONE]` themselves, and standard OpenAI-compatible
     // upstreams end with finish_reason + [DONE] per spec. So a close that
     // forwarded content but no terminal marker is an upstream drop, not a
@@ -629,7 +635,11 @@ function resolveSilentCloseOutcome(input: {
   return null;
 }
 
-export function createDisconnectAwareStream(transformStream, streamController) {
+export function createDisconnectAwareStream(
+  transformStream,
+  streamController,
+  options: { highWaterMark?: number } = {}
+) {
   const reader = transformStream.readable.getReader();
   const writer = transformStream.writable.getWriter();
   const terminalDecoder = new TextDecoder();
@@ -696,6 +706,8 @@ export function createDisconnectAwareStream(transformStream, streamController) {
       streamController.markClientTerminalSeen?.();
     }
   };
+
+  const highWaterMark = options.highWaterMark ?? 16384;
 
   return new ReadableStream(
     {
@@ -818,7 +830,7 @@ export function createDisconnectAwareStream(transformStream, streamController) {
         await Promise.allSettled([reader.cancel(reason), writer.abort(reason)]);
       },
     },
-    { highWaterMark: 16384 }
+    { highWaterMark }
   );
 }
 
@@ -861,7 +873,8 @@ export function pipeWithDisconnect(
     const transformedBody = providerResponse.body.pipeThrough(transformStream);
     return createDisconnectAwareStream(
       { readable: transformedBody, writable: createNoopAbortWritable() },
-      streamController
+      streamController,
+      { highWaterMark: opts.highWaterMark }
     );
   }
 
@@ -1033,6 +1046,7 @@ export function pipeWithDisconnect(
     .pipeThrough(transformStream);
   return createDisconnectAwareStream(
     { readable: transformedBody, writable: createNoopAbortWritable() },
-    wrappedController
+    wrappedController,
+    { highWaterMark: opts.highWaterMark }
   );
 }

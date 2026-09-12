@@ -331,8 +331,12 @@ function runCompression(
       ...options,
       config: { ...options.config, memoizeCompressionResults: false },
     });
+    // memoStore clones internally, so the cache entry stays isolated from the caller's
+    // live object. Return the caller's own `result` (upstream #11727 semantics): handing
+    // back the stored clone would let the caller's later mutations corrupt the cache —
+    // the exact bug the result-memo mutation-isolation test guards.
     memoStore(key, result);
-    return memoLookup(key)!;
+    return result;
   }
   if (mode === "rtk") {
     return applyRtkCompression(body, {
@@ -564,8 +568,10 @@ async function runCompressionAsync(
       ...options,
       config: { ...options.config, memoizeCompressionResults: false },
     });
+    // Same contract as the sync path: store the internal clone; return the caller's own
+    // object so later caller mutations cannot corrupt the cache (#11727 semantics).
     memoStore(key, result);
-    return memoLookup(key)!;
+    return result;
   }
   // Single-mode omniglyph (async-only) — resolution lives in engines/omniglyphSingleMode.ts.
   if (mode === "omniglyph") return applyOmniglyphSingleMode(body, options);

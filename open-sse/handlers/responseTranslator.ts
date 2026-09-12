@@ -5,6 +5,7 @@ import {
 } from "../services/geminiThoughtSignatureStore.ts";
 import { normalizeOpenAICompatibleFinishReasonString } from "../utils/finishReason.ts";
 import { containsTextualToolCallMarker } from "../utils/textualToolCall.ts";
+import { stripObfuscationZeroWidth } from "../utils/zeroWidth.ts";
 import { getAnyReasoningValue } from "../utils/reasoningFields.ts";
 import {
   caseInsensitiveToolNameLookup,
@@ -63,7 +64,7 @@ function parseTextualToolCall(text: unknown): { name: string; args: unknown } | 
   // variations, e.g. a leading "(empty)" marker or zero-width chars inserted
   // into argument strings. Normalize those variants before parsing so the
   // response is still surfaced as a structured OpenAI tool call.
-  const normalized = text.replace(/[\u200B-\u200D\uFEFF]/g, "");
+  const normalized = stripObfuscationZeroWidth(text);
   const match = normalized.match(
     /^[\s\S]*?\[Tool call:\s*([^\]\n]+)\]\s*\nArguments:\s*([\s\S]+?)\s*$/
   );
@@ -265,7 +266,15 @@ export function translateNonStreamingResponse(
     if (toolCalls.length > 0) {
       message.tool_calls = toolCalls;
     }
-    if (message.content === undefined) {
+    if (
+      (!message.content ||
+        (typeof message.content === "string" && message.content.trim().length === 0)) &&
+      toolCalls.length === 0 &&
+      replayableReasoningContent &&
+      replayableReasoningContent.trim().length > 0
+    ) {
+      message.content = replayableReasoningContent;
+    } else if (message.content === undefined) {
       message.content = "";
     }
 
@@ -311,10 +320,15 @@ export function translateNonStreamingResponse(
         promptTokensDetails.cached_tokens,
         usage.cache_read_input_tokens
       );
+      // `cache_write_tokens` is the alias emitted by the codex-chatgpt-web bridge
+      // (input_tokens_details) and by OpenRouter/Devin Desktop (top level).
       const cacheCreationInputTokens = firstPositiveNumber(
         inputTokensDetails.cache_creation_tokens,
         promptTokensDetails.cache_creation_tokens,
-        usage.cache_creation_input_tokens
+        usage.cache_creation_input_tokens,
+        inputTokensDetails.cache_write_tokens,
+        promptTokensDetails.cache_write_tokens,
+        usage.cache_write_tokens
       );
       const reasoningTokens = firstPositiveNumber(
         outputTokensDetails.reasoning_tokens,

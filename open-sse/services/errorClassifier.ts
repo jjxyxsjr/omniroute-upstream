@@ -285,7 +285,7 @@ export function classifyProviderError(
   const oauthInvalid = isOAuthInvalidToken(bodyStr);
   const preserveQuota429 = shouldPreserveQuotaSignalsFor429(provider);
 
-  if ((creditsExhausted || subscriptionQuotaExhausted) && [400, 402, 403].includes(statusCode)) {
+  if ((creditsExhausted || subscriptionQuotaExhausted) && [400, 401, 402, 403].includes(statusCode)) {
     return PROVIDER_ERROR_TYPES.QUOTA_EXHAUSTED;
   }
 
@@ -392,8 +392,19 @@ export function classifyProviderError(
     if (recoverableProject403) {
       return PROVIDER_ERROR_TYPES.PROJECT_ROUTE_ERROR;
     }
-    // #8813 — ChatGPT Web's Cloudflare Sentinel/Turnstile 403 is a TERMINAL
-    // block: the user's IP/session needs a browser Turnstile challenge, and
+    // Kiro IDC missing profileArn — AWS returns 403 "User is not authorized to make this call"
+    // when the request is sent without a profileArn or to the wrong Q Developer region.
+    // This is a recoverable configuration issue, not a ban: the account still works in Kiro IDE.
+    // Do NOT classify as FORBIDDEN (which bans permanently). Treat as PROJECT_ROUTE_ERROR
+    // so the connection stays active and can be retried after profile discovery (#10725).
+    const isKiroProfile403 =
+      (p === "kiro" || p === "amazon-q") &&
+      bodyStr.includes("User is not authorized to make this call");
+    if (isKiroProfile403) {
+      return PROVIDER_ERROR_TYPES.PROJECT_ROUTE_ERROR;
+    }
+    // A Cloudflare Sentinel/Turnstile 403 is a TERMINAL block for browser-session
+    // providers: the user's IP/session needs a browser Turnstile challenge, and
     // retrying the same connection will keep 403ing. Classify as FORBIDDEN so
     // the connection gets banned and combo routing falls back to other providers.
     // Must be checked BEFORE the generic apikey-403→null return below, which
@@ -410,7 +421,7 @@ export function classifyProviderError(
       return null;
     }
     // No-credential ("authType: none") providers — free, stateless per-request
-    // token proxies like mimocode/theoldllm — have no real account/credential
+    // token proxies — have no real account/credential
     // to revoke. An unrecognized 403 from these is a transient upstream
     // rate-limit/blocklist signal, not an account ban: keep it recoverable so
     // the connection cooldown/retry layer handles it instead of a permanent

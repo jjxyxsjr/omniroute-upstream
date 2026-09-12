@@ -49,7 +49,7 @@ import { getKiroUsage, buildKiroUsageResult, discoverKiroProfileArn } from "./us
 export { buildKiroUsageResult, discoverKiroProfileArn } from "./usage/kiro.ts";
 import { getAdobeFireflyUsage } from "./usage/adobeFirefly.ts";
 import { getOpenrouterUsage } from "./usage/openrouter.ts";
-import { getOllamaCloudUsage, getOpenCodeGoUsage } from "./opencodeOllamaUsage.ts";
+import { getOllamaCloudUsage } from "./opencodeOllamaUsage.ts";
 import { getCodeBuddyCnUsage } from "./usage/codebuddy-cn.ts";
 import { getPromptQlUsage } from "./usage/promptql.ts";
 import { getHyperAgentUsage } from "./usage/hyperagent.ts";
@@ -61,6 +61,9 @@ import { getQoderUsage, parseQoderUserStatusUsage } from "./usage/qoder.ts";
 export { parseQoderUserStatusUsage } from "./usage/qoder.ts";
 import { getOpencodeUsage } from "./usage/opencode.ts";
 import { getDeepseekUsage } from "./usage/deepseek.ts";
+import { getMoonshotOpenPlatformUsage } from "./moonshotQuotaFetcher.ts";
+import { isMoonshotOpenPlatformConnection } from "./usage/moonshotOpenPlatform.ts";
+import { getDevinCliUsage } from "./usage/devinCli.ts";
 import { getBailianCodingPlanUsage } from "./usage/bailian.ts";
 import { getVertexUsage } from "./usage/vertex.ts";
 import { getXiaomiMimoUsage } from "./usage/xiaomi-mimo.ts";
@@ -68,10 +71,12 @@ import { getXaiUsage } from "./usage/xai.ts";
 import { getXaiOauthUsage } from "./usage/xaiOauth.ts";
 import { getGrokCliUsage } from "./usage/grokCli.ts";
 import { getFirecrawlUsage } from "./usage/firecrawl.ts";
+import { getVolcenginePlanUsage } from "./usage/volcenginePlan.ts";
 import { getCommandCodeUsage } from "./usage/command-code.ts";
 import { getQwenTokenPlanUsage } from "./usage/qwen-token-plan.ts";
 import { getConolUsage } from "./conolUsage.ts";
 import { getAgentrouterUsage } from "./usage/agentrouter.ts";
+import { getKilocodeUsage } from "./usage/kilocode.ts";
 
 type JsonRecord = Record<string, unknown>;
 type UsageProviderConnection = JsonRecord & {
@@ -86,64 +91,16 @@ type UsageProviderConnection = JsonRecord & {
 
 /**
  * Single source of truth for which providers have a `getUsageForProvider`
- * implementation. Consumers like `genericQuotaFetcher.ts` reference this so
- * the registration list can't drift from the switch statement below.
+ * implementation — consumers like `genericQuotaFetcher.ts` reference it so the
+ * registration list can't drift from the switch statement below.
  *
- * If you add a new provider to the switch, add it here too.
+ * If you add a new provider to the switch, add it to the list too. The list now lives in
+ * `./usage/fetcherProviders.ts` (a zero-dependency leaf) so that consumers which only need
+ * to know *whether* a fetcher exists — the provider-plugin manifest — can read it without
+ * importing this dispatcher. Re-exported here so this stays the public import path.
  */
-export const USAGE_FETCHER_PROVIDERS = [
-  "github",
-  "antigravity",
-  "agy",
-  "claude",
-  "codex",
-  "cursor",
-  "kiro",
-  "amazon-q",
-  "kimi-coding",
-  "kimi-coding-apikey",
-  "qoder",
-  "glm",
-  "glm-cn",
-  "zai",
-  "glmt",
-  "opencode-go",
-  "ollama-cloud",
-  "minimax",
-  "minimax-cn",
-  "crof",
-  "bailian-coding-plan",
-  "qwen-cloud-token-plan",
-  "nanogpt",
-  "deepseek",
-  "opencode",
-  "opencode-zen",
-  "xiaomi-mimo",
-  "xai",
-  "xai-oauth",
-  "xao",
-  "grok-cli",
-  "vertex",
-  "vertex-partner",
-  "codebuddy-cn",
-  "openrouter",
-  // PromptQL playground credits (data.pro.ql.app getCreditSummary)
-  "promptql",
-  "pql",
-  // HyperAgent billing usage (creditBlocks USD)
-  "hyperagent",
-  "ha",
-  // Firecrawl team credits (GET /v2/team/credit-usage)
-  "firecrawl",
-  // Command Code credits + 5h/weekly windows (GET /alpha/billing/credits)
-  "command-code",
-  "conol-web",
-  "cnl",
-  // AgentRouter (New-API) console balance (GET /api/user/self)
-  "agentrouter",
-] as const;
-
-export type UsageFetcherProvider = (typeof USAGE_FETCHER_PROVIDERS)[number];
+export { USAGE_FETCHER_PROVIDERS } from "./usage/fetcherProviders.ts";
+export type { UsageFetcherProvider } from "./usage/fetcherProviders.ts";
 
 /**
  * Get usage data for a provider connection
@@ -155,6 +112,10 @@ export async function getUsageForProvider(
   options: { forceRefresh?: boolean } = {}
 ) {
   const { id, provider, accessToken, apiKey, providerSpecificData, projectId, email } = connection;
+
+  if (isMoonshotOpenPlatformConnection(connection)) {
+    return await getMoonshotOpenPlatformUsage(connection);
+  }
 
   switch (provider) {
     case "github":
@@ -197,7 +158,7 @@ export async function getUsageForProvider(
         ...(provider === "glm-cn" ? { apiRegion: "china" } : {}),
       });
     case "opencode-go":
-      return await getOpenCodeGoUsage(apiKey || "", providerSpecificData);
+      return await getOpencodeUsage(id || "", apiKey || "");
     case "ollama-cloud":
       return await getOllamaCloudUsage(providerSpecificData);
     case "minimax":
@@ -213,6 +174,9 @@ export async function getUsageForProvider(
       return await getNanoGptUsage(apiKey || "");
     case "deepseek":
       return await getDeepseekUsage(id || "", apiKey || "");
+    case "moonshot":
+    case "kimi":
+      return await getMoonshotOpenPlatformUsage(connection);
     case "openrouter":
       return await getOpenrouterUsage(id || "", apiKey || "", providerSpecificData);
     case "opencode":
@@ -242,6 +206,9 @@ export async function getUsageForProvider(
       return await getHyperAgentUsage(apiKey || accessToken, providerSpecificData);
     case "firecrawl":
       return await getFirecrawlUsage(id || "", apiKey, connection);
+    case "volcengine-agent-plan":
+    case "volcengine-coding-plan":
+      return await getVolcenginePlanUsage(apiKey || "", provider, providerSpecificData);
     case "command-code":
       return await getCommandCodeUsage(apiKey || accessToken || "");
     case "conol-web":
@@ -249,6 +216,11 @@ export async function getUsageForProvider(
       return await getConolUsage(apiKey || accessToken, providerSpecificData);
     case "agentrouter":
       return await getAgentrouterUsage(id, connection);
+    case "kilocode":
+      return await getKilocodeUsage(id, connection);
+    case "devin-cli":
+      // Devin CLI tokens live in `accessToken` (oauth import) or `apiKey`.
+      return await getDevinCliUsage(apiKey || accessToken);
     default:
       return { message: `Usage API not implemented for ${provider}` };
   }
@@ -288,4 +260,5 @@ export const __testing = {
   mapSubscriptionTierStringToPlanLabel,
   toDisplayLabel,
   getKiroUsage,
+  getKilocodeUsage,
 };

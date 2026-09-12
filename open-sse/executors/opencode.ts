@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   BaseExecutor,
   type ExecuteInput,
@@ -10,7 +11,11 @@ import {
   injectReasoningContentForThinkingModel,
   isThinkingMessageModel,
 } from "../utils/reasoningContentInjector.ts";
-import { runWithProxyContext } from "../utils/proxyFetch.ts";
+import {
+  hasAmbientProxyContext,
+  runWithDirectFetchContext,
+  runWithProxyContext,
+} from "../utils/proxyFetch.ts";
 import { forwardOpencodeClientHeaders } from "../utils/opencodeHeaders.ts";
 import {
   type AccountProxyConfig,
@@ -23,6 +28,8 @@ import {
   isEmptyUpstreamRejection,
   extractChatcmplId,
 } from "./accountRotation.ts";
+import { isOpencodeGeoBlocked, proxyKeyOf } from "./opencodeGeoBlock.ts";
+import { isRetriableUpstreamFailure } from "./opencodeTransientFailure.ts";
 import { isNetworkRotationSharedEgressGuardEnabled } from "@/shared/utils/featureFlags";
 
 /**
@@ -245,6 +252,17 @@ export function createMuseSparkStreamFinishNormalizer(
   };
 }
 
+function isResponsesTerminalLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("data:")) return false;
+  try {
+    const payload = JSON.parse(trimmed.slice(5).trim()) as Record<string, unknown>;
+    return payload.type === "response.completed";
+  } catch {
+    return false;
+  }
+}
+
 export class OpencodeExecutor extends BaseExecutor {
   /** Delegates to `isPremiumOpencodeModel`. Exported for testability. */
   static isPremiumModel(model: string, provider: string): boolean {
@@ -262,8 +280,8 @@ export class OpencodeExecutor extends BaseExecutor {
   private accounts: OpencodeAccountState[] = [
     { fingerprint: "", cooldownUntil: 0, consecutiveFails: 0, proxy: null },
   ];
-  // Not `private`: passed as the mutable rotation cursor to the shared
-  // pickAccount() helper, which needs a plain `{ nextAccountIdx }` shape —
+  // Not `private`: passed as the mutable rotation cursor to
+  // pickRotatableAccount(), which needs a plain `{ nextAccountIdx }` shape —
   // TS's private-member nominal check rejects `this` there otherwise.
   nextAccountIdx = 0;
 
@@ -308,9 +326,11 @@ export class OpencodeExecutor extends BaseExecutor {
     if (this.nextAccountIdx >= this.accounts.length) this.nextAccountIdx = 0;
   }
 
-  /** Round-robin pick, skipping accounts in cooldown; falls back to the next index. */
-  private pickAccount(): OpencodeAccountState {
-    return pickRotatableAccount(this.accounts, this);
+  /** Round-robin pick, skipping non-candidates; falls back to the next index. */
+  private pickAccountWith(
+    isReady: (account: OpencodeAccountState) => boolean
+  ): OpencodeAccountState {
+    return pickRotatableAccount(this.accounts, this, isReady);
   }
 
   private markCooldown(
@@ -384,24 +404,51 @@ export class OpencodeExecutor extends BaseExecutor {
     const encoder = new TextEncoder();
     let buffer = "";
     const reader = response.body.getReader();
+    let closed = false;
     const stream = new ReadableStream<Uint8Array>({
-      async pull(controller) {
+      async start(controller) {
         try {
-          const { done, value } = await reader.read();
-          if (done) {
-            if (buffer.length > 0) controller.enqueue(encoder.encode(normalizer(buffer)));
-            controller.close();
-            return;
+          while (!closed) {
+            const { done, value } = await reader.read();
+            if (done) {
+              buffer += decoder.decode();
+              if (buffer.length > 0 && !closed) {
+                controller.enqueue(encoder.encode(normalizer(buffer)));
+              }
+              if (!closed) {
+                closed = true;
+                controller.close();
+              }
+              return;
+            }
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+            for (const line of lines) {
+              const normalized = normalizer(line);
+              controller.enqueue(encoder.encode(normalized + "\n"));
+              if (isResponsesTerminalLine(line)) {
+                // OpenCode Zen sends a ping after response.completed and may keep
+                // the HTTP connection alive. The Responses terminal event is
+                // authoritative; do not let those post-completion pings hold Chat
+                // Completions open.
+                closed = true;
+                void reader.cancel().catch(() => undefined);
+                controller.close();
+                return;
+              }
+            }
           }
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-          for (const line of lines) controller.enqueue(encoder.encode(normalizer(line) + "\n"));
         } catch (err) {
-          controller.error(err);
+          if (!closed) {
+            closed = true;
+            controller.error(err);
+          }
         }
       },
       cancel(reason) {
+        closed = true;
         reader.cancel(reason).catch(() => undefined);
       },
     });
@@ -450,11 +497,18 @@ export class OpencodeExecutor extends BaseExecutor {
       // 200s ("Provider returned empty content"). Raise tiny budgets to the
       // floor before dispatch (see MUSE_SPARK_MIN_OUTPUT_TOKENS).
       if (input.body && typeof input.body === "object" && !Array.isArray(input.body)) {
-        applyMuseSparkMinOutputTokens(String(input.model ?? ""), input.body as Record<string, unknown>);
+        applyMuseSparkMinOutputTokens(
+          String(input.model ?? ""),
+          input.body as Record<string, unknown>
+        );
       }
 
       this.syncAccountsFromCredentials(input.credentials);
       const { log } = input;
+      // Request-scoped attribution prefix for rotation logs: message head,
+      // empty when absent (never n/a/none/fabricated). The existing motif
+      // stays byte-identical after the prefix.
+      const cid = input.correlationId ? `correlationId=${input.correlationId} ` : "";
 
       const hasProxies = this.accounts.some((a) => a.proxy !== null);
       // Fast path: no multi-account proxy wiring configured → original behavior,
@@ -463,7 +517,15 @@ export class OpencodeExecutor extends BaseExecutor {
       // else passes untouched: this path deliberately preserves BaseExecutor's
       // intra-URL 429 retries (no skipUpstreamRetry here).
       if (this.accounts.length === 1 && !hasProxies) {
-        const single = (await super.execute(input)) as HttpExecuteResult;
+        // #11894: a connection-level proxy assignment (proxy_assignments) reaches
+        // the executor as the AMBIENT proxy context — the chat handler wraps
+        // execute() in runWithProxyContext(proxyInfo.proxy, ...) before we run.
+        // Only pin direct egress when no such context exists; otherwise let the
+        // ambient proxy stand instead of clobbering it with the direct sentinel.
+        const dispatch = () => super.execute(input);
+        const single = (await (hasAmbientProxyContext()
+          ? dispatch()
+          : runWithDirectFetchContext(dispatch))) as HttpExecuteResult;
         if (single.response.status === 400) {
           let bodyText: string | null = null;
           try {
@@ -476,7 +538,7 @@ export class OpencodeExecutor extends BaseExecutor {
               const chatcmplId = extractChatcmplId(bodyText);
               log?.warn?.(
                 "OPENCODE",
-                `upstream empty rejection on direct account (${chatcmplId}), retrying once…`
+                `${cid}upstream empty rejection on direct account (${chatcmplId}), retrying once…`
               );
               return this.normalizeMuseSparkResponse(input, await super.execute(input));
             }
@@ -510,15 +572,59 @@ export class OpencodeExecutor extends BaseExecutor {
       // through the accounts is the retry). Avoids an unbounded loop on a
       // persistently malformed upstream.
       const emptyRejectionBudget = this.accounts.length === 1 ? 1 : 0;
+      // Tried set: proxy keys already proven unusable for this request's
+      // model (geo-blocked, or transient 5xx). Request-local only — nothing
+      // persists past execute().
+      const geoTriedProxyKeys = new Set<string>();
+      let directTried = false;
 
       for (let attempt = 0; attempt < this.accounts.length + emptyRejectionBudget; attempt++) {
-        const account = this.pickAccount();
+        const isProxiedCandidate = (a: OpencodeAccountState): boolean => {
+          if (a.cooldownUntil > Date.now()) return false;
+          // Without any geo evidence this pass, every cooldown-ready account
+          // stays eligible (preserves the plain round-robin first pick).
+          if (a.proxy === null) return !directTried || geoTriedProxyKeys.size === 0;
+          const k = proxyKeyOf(a.proxy);
+          return k !== null && !geoTriedProxyKeys.has(k);
+        };
+        let account = this.pickAccountWith(isProxiedCandidate);
+        // Last resort: a single direct attempt (distinct egress that may
+        // succeed) once no proxied account is a candidate — never before.
+        if (!isProxiedCandidate(account) && !directTried && geoTriedProxyKeys.size > 0) {
+          const direct = this.accounts.find(
+            (a) => a.proxy === null && a.cooldownUntil <= Date.now()
+          );
+          if (direct) {
+            account = direct;
+          }
+        }
+        const lastStatus = lastResult !== null ? lastResult.response.status : null;
+        const lastWasGeo = lastStatus === 403 || lastStatus === 451;
+        const lastWasTransient = lastStatus !== null && lastStatus >= 500 && lastStatus < 600;
+        const isMonoRetryOwed = this.accounts.length === 1 && lastWasTransient;
+        if (
+          !isMonoRetryOwed &&
+          lastResult !== null &&
+          geoTriedProxyKeys.size > 0 &&
+          !isProxiedCandidate(account) &&
+          !(account.proxy === null && !directTried)
+        ) {
+          // Geo exhaustion (last was 403/451) → surface as-is, no success mark.
+          // Transient exhaustion (last was 5xx) → same: surface last as-is.
+          // Any other last status (e.g. 429 after 403s) → skip without a call.
+          if (lastWasGeo || lastWasTransient) break;
+          continue;
+        }
+        // Commit the last-resort direct attempt so a later exclusion breaks
+        // instead of retrying it. Set here (not at pick time) so the guard
+        // above still lets this committed attempt through.
+        if (account.proxy === null && geoTriedProxyKeys.size > 0) directTried = true;
         const masked = maskAccountId(account.fingerprint);
 
         if (sharedEgressGuardEnabled && sharedEgressDown && !account.proxy) {
           log?.warn?.(
             "OPENCODE",
-            `skipping account ${masked} (no dedicated proxy, shared egress already down this request)`
+            `${cid}skipping account ${masked} (no dedicated proxy, shared egress already down this request)`
           );
           continue;
         }
@@ -529,7 +635,7 @@ export class OpencodeExecutor extends BaseExecutor {
         // Token stays masked — never log the full account id.
         log?.info?.(
           "OPENCODE",
-          `dispatch via account ${masked} (idx ${attempt + 1}/${this.accounts.length})` +
+          `${cid}dispatch via account ${masked} (idx ${attempt + 1}/${this.accounts.length})` +
             (account.proxy
               ? ` through proxy ${account.proxy.host}:${account.proxy.port}`
               : " direct")
@@ -561,20 +667,20 @@ export class OpencodeExecutor extends BaseExecutor {
               lastSharedEgressError = err;
               log?.warn?.(
                 "OPENCODE",
-                `network error on account ${masked} (no dedicated proxy, shared egress), cooldown applied — trying next available account… (${reason})`
+                `${cid}network error on account ${masked} (no dedicated proxy, shared egress), cooldown applied — trying next available account… (${reason})`
               );
               continue;
             }
             log?.warn?.(
               "OPENCODE",
-              `network error on account ${masked} (no dedicated proxy, shared egress) — not rotating (${reason})`
+              `${cid}network error on account ${masked} (no dedicated proxy, shared egress) — not rotating (${reason})`
             );
             throw err;
           }
           this.markCooldown(account);
           log?.warn?.(
             "OPENCODE",
-            `network error on account ${masked}, rotating to next… (${reason})`
+            `${cid}network error on account ${masked}, rotating to next… (${reason})`
           );
           continue;
         }
@@ -583,8 +689,51 @@ export class OpencodeExecutor extends BaseExecutor {
         const status = result.response.status;
         if (status === 429) {
           this.markCooldown(account);
-          log?.warn?.("OPENCODE", `Rate limited (429) on account ${masked}, rotating to next…`);
+          log?.warn?.(
+            "OPENCODE",
+            `${cid}Rate limited (429) on account ${masked}, rotating to next…`
+          );
           continue;
+        }
+
+        if (isRetriableUpstreamFailure(status)) {
+          const key = proxyKeyOf(account.proxy);
+          if (key !== null) geoTriedProxyKeys.add(key);
+          else directTried = true;
+          log?.warn?.(
+            "OPENCODE",
+            `${cid}transient upstream ${status} on account ${masked} (proxy ${key ?? "direct"}), rotating to next…`
+          );
+          // Deliberately a separate branch from the 400-empty arm below,
+          // not one merged `if`: this arm never touches the body, the 400
+          // arm must clone-read it. Both share the predicate + tried-set.
+          // Single proxied account: one retry via the existing budget (a
+          // proxy-less single account takes the fast path, never the loop).
+          // Transient is not deterministic like geo: upstream may recover.
+          // No 0-retry guard here (it stays geo-only).
+          continue;
+        }
+
+        if (status === 403 || status === 451) {
+          let bodyText: string | null = null;
+          try {
+            bodyText = await result.response.clone().text();
+          } catch {
+            log?.debug?.("OPENCODE", "body read failed on geo-block check");
+          }
+          if (bodyText !== null && isOpencodeGeoBlocked(status, bodyText)) {
+            const key = proxyKeyOf(account.proxy);
+            if (key !== null) geoTriedProxyKeys.add(key);
+            else directTried = true;
+            log?.warn?.(
+              "OPENCODE",
+              `${cid}geo-blocked on account ${masked} (proxy ${key ?? "direct"}), rotating to next…`
+            );
+            // Single account with a proxy: 0 retries (same egress = dead latency).
+            // (The fast path above already covers single-without-proxy; here length===1 WITH proxy.)
+            if (this.accounts.length === 1) return result;
+            continue;
+          }
         }
 
         // Empty upstream rejection (malformed 400: no error field, no real
@@ -601,11 +750,11 @@ export class OpencodeExecutor extends BaseExecutor {
           } catch {
             log?.debug?.("OPENCODE", "body read failed on empty rejection check");
           }
-          if (bodyText !== null && isEmptyUpstreamRejection(400, bodyText)) {
+          if (bodyText !== null && isRetriableUpstreamFailure(400, bodyText)) {
             const chatcmplId = extractChatcmplId(bodyText);
             log?.warn?.(
               "OPENCODE",
-              `upstream empty rejection on account ${masked} (${chatcmplId}), rotating to next…`
+              `${cid}upstream empty rejection on account ${masked} (${chatcmplId}), rotating to next…`
             );
             continue;
           }
@@ -630,10 +779,7 @@ export class OpencodeExecutor extends BaseExecutor {
       }
 
       // All accounts returned 429 (or errored) — surface the last response.
-      return this.normalizeMuseSparkResponse(
-        input,
-        lastResult ?? (await super.execute(input))
-      );
+      return this.normalizeMuseSparkResponse(input, lastResult ?? (await super.execute(input)));
     } finally {
       this._requestFormat = null;
     }
@@ -735,6 +881,18 @@ export class OpencodeExecutor extends BaseExecutor {
       });
     }
 
+    // Muse's Responses endpoint rejects the short conversation fingerprint used
+    // by the Chat endpoint in practice. Keep the workaround scoped to Muse.
+    if (
+      this._requestFormat === "openai-responses" &&
+      model.startsWith("muse-spark") &&
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        headers["x-opencode-session"] || ""
+      )
+    ) {
+      headers["x-opencode-session"] = randomUUID();
+    }
+
     void model;
 
     return headers;
@@ -834,18 +992,23 @@ export class OpencodeExecutor extends BaseExecutor {
     }
     if (modifiedBody && typeof modifiedBody === "object" && !Array.isArray(modifiedBody)) {
       const mb = modifiedBody as Record<string, unknown>;
-      if (Array.isArray(mb.tools) && mb.tools.length > 128) {
-        mb.tools = mb.tools.slice(0, 128);
-      }
-    }
-    if (modifiedBody && typeof modifiedBody === "object" && !Array.isArray(modifiedBody)) {
-      const mb = modifiedBody as Record<string, unknown>;
       const parsed = parseEffortLevel(model);
       if (parsed) {
-        mb.model = parsed.baseModel;
-        if (mb.reasoning_effort === undefined) {
-          mb.reasoning_effort = parsed.effort;
+        const deepseekFamily =
+          parsed.baseModel === "deepseek-v4-pro" || parsed.baseModel === "deepseek-v4-flash";
+        if (deepseekFamily) {
+          // DeepSeek via opencode-go proxies the native DeepSeek contract, which
+          // accepts a flat reasoning_effort field (#4647).
+          mb.model = parsed.baseModel;
+          if (mb.reasoning_effort === undefined) {
+            mb.reasoning_effort = parsed.effort;
+          }
         }
+        // #10788: every other family's ONLY native effort mechanism is the
+        // -<tier> suffix in the model id itself (the ids `opencode models
+        // opencode-go --verbose` lists). The opencode-go ChatCompletionRequest
+        // carries no flat reasoning_effort field, so rewriting to the base id
+        // silently dropped the tier — forward the aliased id verbatim instead.
       }
     }
     // #1543 / upstream PR #1099: thinking-mode upstreams routed through OpenCode
