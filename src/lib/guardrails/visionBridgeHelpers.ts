@@ -230,7 +230,11 @@ export function extractImageParts(messages: RequestMessage[]): ImagePart[] {
         ...(inner ? { innerIndex: p.partIndex } : {}),
         imageUrl: p.ref,
         imageType:
-          p.shape === "image_base64" ? "image" : p.shape === "image_source_url" ? "url" : "image_url",
+          p.shape === "image_base64"
+            ? "image"
+            : p.shape === "image_source_url"
+              ? "url"
+              : "image_url",
       });
     }
   };
@@ -242,7 +246,11 @@ export function extractImageParts(messages: RequestMessage[]): ImagePart[] {
       if (!part || typeof part !== "object") continue;
       // Top-level replaceable image part (shape recognition via the shared
       // detector so extraction and the combo filter can never disagree).
-      pushReplaceable(detectMediaParts([{ role: "user", content: [part] }]), messageIndex, partIndex);
+      pushReplaceable(
+        detectMediaParts([{ role: "user", content: [part] }]),
+        messageIndex,
+        partIndex
+      );
       // Images nested inside a tool_result content array: scan the inner array
       // as top-level content so each hit carries its own inner position.
       if (part.type === "tool_result" && Array.isArray(part.content)) {
@@ -1027,7 +1035,7 @@ export function replaceImageParts(
         // (Claude protocol tool-returned screenshots). Splice descriptions in
         // place inside the inner array, in the same inner order extract
         // collected them. The container block (tool_use_id etc.) is preserved.
-        const toolPart = part as { type: string; content: unknown[] };
+        const toolPart = part as unknown as { type: string; content: unknown[] };
         toolPart.content = toolPart.content.map((inner) => {
           if (!isReplaceableImagePart(inner)) return inner;
           if (descriptionIndex >= descriptions.length) return inner;

@@ -68,6 +68,7 @@ import {
   readCodexTurnStateHeader,
 } from "../config/codexTurnState.ts";
 import { trackDevice, extractIpFromHeaders } from "../services/deviceTracker.ts";
+import { recordCrashFailure } from "../services/crashStormBreaker.ts";
 import { getCombosCached } from "./chatCore/comboContextCache.ts";
 export { clearCombosCache, clearUpstreamProxyConfigCache } from "./chatCore/comboContextCache.ts";
 import {
@@ -4544,25 +4545,25 @@ export async function handleChatCore({
       let upstreamErrorCode: string | undefined;
       let upstreamErrorType: string | undefined;
 
-    // nnd.21 候C: a stream-readiness failure synthesized by an executor's INNER
-    // gate (glm.ts ensureStreamReadiness) reaches this branch as a plain 504 —
-    // its zero-first-byte signal only survives in the response header (see
-    // streamReadiness.ts ANY_BYTE_AT_HEADER). Thread it onto the failure result
-    // so the routing layer's switch gate (shouldSwitchConnectionOnStreamReadiness
-    // Timeout, nnd.20 #47) sees a DEFINED anyByteAt: null (zero bytes) terminates
-    // instead of switching; a timestamp keeps the one bounded switch. Absent
-    // header (real upstream 5xx) stays undefined = legacy behavior.
-    const readinessAnyByteAt = parseAnyByteAtHeader(
-      providerResponse.headers?.get?.(ANY_BYTE_AT_HEADER)
-    );
-    // nnd.25 埋点（157 §六-1）：以线路原始形态捕获错误响应文本头 512 字符（在
-    // 任何 JSON.parse 还原之前，\u003c= 等转义形原样保留）。best-effort：body 若
-    // 已被更早的读取消费则 clone 抛错，静默降级为 undefined（成功请求零开销）。
-    errorRawHead = await providerResponse
-      .clone()
-      .text()
-      .then((t) => (t ? t.slice(0, 512) : undefined))
-      .catch(() => undefined);
+      // nnd.21 候C: a stream-readiness failure synthesized by an executor's INNER
+      // gate (glm.ts ensureStreamReadiness) reaches this branch as a plain 504 —
+      // its zero-first-byte signal only survives in the response header (see
+      // streamReadiness.ts ANY_BYTE_AT_HEADER). Thread it onto the failure result
+      // so the routing layer's switch gate (shouldSwitchConnectionOnStreamReadiness
+      // Timeout, nnd.20 #47) sees a DEFINED anyByteAt: null (zero bytes) terminates
+      // instead of switching; a timestamp keeps the one bounded switch. Absent
+      // header (real upstream 5xx) stays undefined = legacy behavior.
+      const readinessAnyByteAt = parseAnyByteAtHeader(
+        providerResponse.headers?.get?.(ANY_BYTE_AT_HEADER)
+      );
+      // nnd.25 埋点（157 §六-1）：以线路原始形态捕获错误响应文本头 512 字符（在
+      // 任何 JSON.parse 还原之前，\u003c= 等转义形原样保留）。best-effort：body 若
+      // 已被更早的读取消费则 clone 抛错，静默降级为 undefined（成功请求零开销）。
+      errorRawHead = await providerResponse
+        .clone()
+        .text()
+        .then((t) => (t ? t.slice(0, 512) : undefined))
+        .catch(() => undefined);
       if (upstreamErrorParsed) {
         statusCode = parsedStatusCode;
         message = parsedMessage;
@@ -4597,6 +4598,11 @@ export async function handleChatCore({
           `${provider} ${restatement.fromStatus}→${statusCode} (${restatement.ruleId})`
         );
       }
+
+      // nnd.25 崩溃风暴熔断取证（9-8 悬案根治）：以最终 statusCode+message 记一笔
+      // provider×签名 滑窗样本。5xx-only；上游信誉机制（冷却/锁）不经此路——
+      // 熔断闸只跳 dispatch，不污染 provider 信誉（executeTargetGates crash_storm 门）。
+      recordCrashFailure(provider, message, statusCode);
 
       const signatureRecovery = pipelineRecovered
         ? { attempted: false, succeeded: false, execution: null, error: null, recoveryBody: null }
@@ -5880,8 +5886,7 @@ export async function handleChatCore({
         // hardcoded "(completion_tokens=0)" and misled the 2026-09-07 storm
         // diagnosis (real reclassifications carried completion_tokens=786).
         const emptyUsage = (streamResponseBody as Record<string, unknown>).usage as
-          | Record<string, unknown>
-          | undefined;
+          Record<string, unknown> | undefined;
         log?.warn?.(
           "STREAM_EMPTY_CONTENT",
           `${provider}/${model} stream completed with zero visible content (usage=${JSON.stringify(emptyUsage ?? null)}) — reclassifying as empty_content`

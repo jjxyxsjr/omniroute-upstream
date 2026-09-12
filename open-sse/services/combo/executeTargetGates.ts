@@ -12,6 +12,7 @@ import {
   isModelLocked,
 } from "../accountFallback.ts";
 import { isProviderInCooldown } from "../providerCooldownTracker.ts";
+import { isCrashStorming } from "../crashStormBreaker.ts";
 import { checkCredentialGate, logCredentialSkip } from "../credentialGate.ts";
 import { errorResponse } from "../../utils/error.ts";
 import { getCircuitBreaker } from "../../../src/shared/utils/circuitBreaker";
@@ -94,6 +95,27 @@ export async function evaluateExecuteTargetGates(opts: {
     return {
       kind: "skip",
       result: stopProtectedPriorityTarget(`Provider ${provider} circuit breaker is open`),
+    };
+  }
+
+  // nnd.25 崩溃风暴熔断（9-8 悬案根治）：provider 熔断刻意排除本机执行错误（#12233），
+  // 请求路径代码炸弹（同签名快败洪流）由此闸兜住——storming provider 的目标本轮跳过，
+  // 健康道照常；窗口自然衰减即自愈，绝不写 provider 冷却/锁。
+  if (provider && isCrashStorming(provider)) {
+    deps.log.warn("COMBO", `Skipping ${modelStr} — crash-storm breaker OPEN for ${provider}`, {
+      provider,
+      code: "CRASH_STORM_OPEN",
+    });
+    recordComboDecision(deps.traceInvocationId, {
+      step: target.executionKey,
+      target: modelStr,
+      decision: "skipped_before_dispatch",
+      reason: "crash_storm",
+    });
+    bumpFallback();
+    return {
+      kind: "skip",
+      result: stopProtectedPriorityTarget(`Provider ${provider} crash-storm breaker is open`),
     };
   }
 

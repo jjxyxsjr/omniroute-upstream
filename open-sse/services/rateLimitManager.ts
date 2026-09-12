@@ -623,7 +623,12 @@ export async function withRateLimit(
   remainingBudgetMs = undefined,
   correlationId = undefined,
   opts:
-    | { executor?: { getTimeoutMs?: () => unknown }; providerSpecificData?: unknown }
+    | {
+        executor?: { getTimeoutMs?: () => unknown };
+        providerSpecificData?: unknown;
+        /** nnd.24①:两段头窗的流式执行死线(ms)——51 合并 #12715 时类型声明曾丢失,回填 */
+        executionExpirationMs?: number;
+      }
     | undefined = undefined
 ) {
   if (!enabledConnections.has(connectionId)) {
@@ -698,11 +703,8 @@ export async function withRateLimit(
     typeof opts?.executionExpirationMs === "number" && Number.isFinite(opts.executionExpirationMs)
       ? opts.executionExpirationMs
       : 0;
-  const executionExpirationMs = Math.max(
-    perConnExec,
-    upstreamMs ?? 0,
-    callerBudgetMs
-  ) || perConnExec;
+  const executionExpirationMs =
+    Math.max(perConnExec, upstreamMs ?? 0, callerBudgetMs) || perConnExec;
   if (upstreamMs && perConnExec < upstreamMs) {
     logRateLimit(
       `[RATE-LIMIT] executionMaxWaitMs ${perConnExec}ms clamped to upstream ${upstreamMs}ms for ${provider}/${model ?? ""}`
