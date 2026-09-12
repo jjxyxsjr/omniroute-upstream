@@ -2,6 +2,11 @@ import { HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import { getRegistryEntry } from "../config/providerRegistry.ts";
 import { resolveFetchStartTimeout } from "../utils/fetchStartTimeoutPolicy.ts";
 import {
+  resolveDirectHeadersTimeoutMs,
+  resolveNonStreamTotalBudgetMs,
+} from "../utils/directResponseStartTimeout.ts";
+import { STREAM_READINESS_MAX_TIMEOUT_MS } from "../utils/streamReadiness.ts";
+import {
   resolveAlternateFormat,
   type AlternateFormat,
 } from "../config/providers/alternateFormats.ts";
@@ -926,9 +931,17 @@ export class BaseExecutor {
       // ceiling (see fetchStartTimeoutPolicy.ts) — non-streaming keeps the flat default.
       // Declared outside the try/catch below so the catch's TIMEOUT log (on the
       // error path) reports the same effective value the fetch actually used.
+      // nnd 调和（156 §四-2）: cap 参数化喂 fetch 层两段头窗的总预算（池化探毒
+      // 45s + fresh 对齐 120s + slack）——上游默认常量 110s 会把 fresh 段有效窗
+      // 压到 65s，nnd.21 修的 ark 冷预填误杀形态将复发；两段窗保持头前阶段
+      // 唯一真相源，外层不杀内层。
       const fetchStartTimeoutPolicy = resolveFetchStartTimeout({
         baseTimeoutMs: this.getTimeoutMs(),
         stream,
+        capMs: resolveNonStreamTotalBudgetMs(
+          resolveDirectHeadersTimeoutMs(),
+          STREAM_READINESS_MAX_TIMEOUT_MS
+        ),
       });
       const fetchStartTimeoutMs = fetchStartTimeoutPolicy.timeoutMs;
       if (fetchStartTimeoutPolicy.capped) {

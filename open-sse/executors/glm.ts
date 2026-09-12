@@ -569,6 +569,10 @@ export class GlmExecutor extends DefaultExecutor {
     if (input.stream && response.ok) {
       const readiness = await ensureStreamReadiness(response, {
         timeoutMs: STREAM_READINESS_TIMEOUT_MS,
+        // nnd 调和（156 §四-3）: 与主门同构接 liveness 续命硬顶，消除"glm 内层
+        // 门 60s 平窗即死 vs 主门 60→120s 续命"的行为分裂（glm 慢热请求吃到
+        // #12189 红利；零字节路径不受续命影响，anyByteAt 三态语义不变）。
+        maxTimeoutMs: STREAM_READINESS_MAX_TIMEOUT_MS,
         provider: this.provider,
         model: input.model,
         log: input.log,
