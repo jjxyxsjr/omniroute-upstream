@@ -756,6 +756,35 @@ export function getModelLockoutSize(): number {
   return modelLockouts.size;
 }
 
+// nnd.25 (backend analysis): read-only snapshot of the in-memory model lockout
+// map for the runtime-state sampler (runtimeStateSnapshots.ts). Deliberately a
+// copy of plain records — never the live Map — so callers cannot mutate lockout
+// state, and no sampler hot path is added to lock/cleanup logic.
+export interface ModelLockoutSummaryEntry {
+  key: string;
+  reason: string;
+  until: number;
+  lockedAt: number;
+  failureCount: number;
+}
+export function getModelLockoutSummary(): ModelLockoutSummaryEntry[] {
+  const now = Date.now();
+  const out: ModelLockoutSummaryEntry[] = [];
+  for (const [key, entry] of modelLockouts) {
+    // Expired-but-not-yet-swept entries (the 15s timer lags) are not part of
+    // the effective routing state — skip them so snapshots reflect reality.
+    if (now > entry.until) continue;
+    out.push({
+      key,
+      reason: entry.reason,
+      until: entry.until,
+      lockedAt: entry.lockedAt,
+      failureCount: entry.failureCount,
+    });
+  }
+  return out;
+}
+
 /**
  * Lock a specific model on a specific account
  * @param {string} provider

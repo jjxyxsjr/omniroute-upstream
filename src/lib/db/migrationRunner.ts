@@ -441,6 +441,12 @@ function isSchemaAlreadyApplied(
     // apply it manually once at upgrade (see deploy/docs/156 §十二).
     case "177":
       return hasColumn(db, "call_logs", "ttft_ms");
+    // nnd.25 (backend analysis): our 178 slot — the CREATE TABLE/INDEX bodies
+    // are IF NOT EXISTS-safe, but the trailing ALTER TABLE on call_logs would
+    // throw "duplicate column name" on any DB that already carries the column
+    // (e.g. a fork DB that applied it under a renumbered slot).
+    case "178":
+      return hasColumn(db, "call_logs", "error_raw_head");
     case "003":
       return hasColumn(db, "provider_nodes", "chat_path");
     case "095":

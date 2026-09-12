@@ -4,7 +4,9 @@
  * Bootstraps the default routing-event sinks:
  *   1. `MemoryRoutingEventStore` — bounded ring buffer for explainability.
  *   2. `QualityTracker` consumer — feeds the auto-combo `quality` scoring factor.
- *   3. Optional OTel/HTTP exporter — enabled only when an OTLP endpoint is set.
+ *   3. `RoutingSqliteSink` (nnd.25) — default-on local persistence into the
+ *      `routing_events` table for backend data analysis.
+ *   4. Optional OTel/HTTP exporter — enabled only when an OTLP endpoint is set.
  *
  * The hot path only calls `emitRoutingEvent()`, which fans out synchronously to
  * these cheap in-memory sinks. No synchronous I/O, no external dependencies.
@@ -33,6 +35,7 @@ import {
   type ProviderQuality,
 } from "./quality.ts";
 import { isRoutingOtelEnabled, OtlpHttpsEventSink } from "./otel.ts";
+import { RoutingSqliteSink } from "./sqliteSink.ts";
 
 const memoryStore = new MemoryRoutingEventStore(500);
 
@@ -46,6 +49,12 @@ const qualitySink: RoutingEventSink = {
 };
 
 let otelSink: OtlpHttpsEventSink | null = null;
+
+// nnd.25 (backend analysis): local-SQLite sink — registered by DEFAULT. The
+// local DB is the flush target (no endpoint to configure), so unlike the OTel
+// exporter there is no env gate; it only ever enqueues on the hot path and
+// drains on its own unref'd timer.
+let sqliteSink: RoutingSqliteSink | null = null;
 
 let initialized = false;
 
@@ -61,6 +70,10 @@ export function initRoutingObservability(env: NodeJS.ProcessEnv = process.env): 
 
   registerRoutingEventSink(memoryStore);
   registerRoutingEventSink(qualitySink);
+
+  // nnd.25: default-on local persistence for backend data analysis.
+  sqliteSink = new RoutingSqliteSink();
+  registerRoutingEventSink(sqliteSink);
 
   if (isRoutingOtelEnabled(env)) {
     const endpoint = (env.OMNIROUTE_OTEL_ENDPOINT ?? env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "").trim();
@@ -113,6 +126,11 @@ export function routingOtelStats(): { buffered: number; dropped: number } | null
   return otelSink ? otelSink.getStats() : null;
 }
 
+/** nnd.25: local-SQLite sink stats for ops dashboards (buffered/dropped/written). */
+export function routingSqliteStats(): { buffered: number; dropped: number; written: number } | null {
+  return sqliteSink ? sqliteSink.getStats() : null;
+}
+
 function listRoutingSinkNames(): string[] {
   return listRoutingEventSinks();
 }
@@ -125,6 +143,10 @@ export function resetRoutingObservability(): void {
   if (otelSink) {
     otelSink.stop();
     otelSink = null;
+  }
+  if (sqliteSink) {
+    sqliteSink.stop();
+    sqliteSink = null;
   }
   initialized = false;
 }

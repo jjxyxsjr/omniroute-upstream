@@ -596,6 +596,19 @@ export async function registerNodejs(): Promise<void> {
     console.warn("[STARTUP] Could not start cleanup scheduler (non-fatal):", msg);
   }
 
+  // nnd.25 (backend analysis): runtime-state snapshot job — samples model
+  // lockouts / circuit breakers / admission semaphores into
+  // runtime_state_snapshots every 5 minutes (unref'd timer). Non-fatal.
+  try {
+    const { startRuntimeStateSnapshotJob } = await import(
+      "@omniroute/open-sse/services/runtimeStateSnapshots"
+    );
+    startRuntimeStateSnapshotJob();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[STARTUP] Could not start runtime-state snapshot job (non-fatal):", msg);
+  }
+
   // Warm the model catalog's durable, apiKey-independent sub-caches at
   // startup — see warmModelCatalogCache() for why the top-level Response
   // cache alone doesn't deliver this. Fire-and-forget, non-fatal.

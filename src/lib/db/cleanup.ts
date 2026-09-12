@@ -529,6 +529,73 @@ export async function cleanupAgenticConversations(): Promise<CleanupResult> {
 }
 
 /**
+ * Fixed 7-day retention for the nnd.25 backend-analysis telemetry tables.
+ * Unlike the dashboard-configured windows above, these tables exist purely for
+ * local post-hoc analysis of routing outcomes / runtime state; 7 days covers
+ * incident review without a settings knob of its own (same precedent as
+ * cleanupCcrBlocks, which also runs on an operator-independent window).
+ */
+const BACKEND_ANALYSIS_RETENTION_DAYS = 7;
+
+/**
+ * Clean up old routing_events rows (nnd.25 backend analysis).
+ */
+export async function cleanupRoutingEvents(): Promise<CleanupResult> {
+  const db = getDbInstance();
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - BACKEND_ANALYSIS_RETENTION_DAYS);
+  const cutoffISO = cutoffDate.toISOString();
+
+  const result: CleanupResult = { deleted: 0, errors: 0 };
+
+  try {
+    if (!tableExists("routing_events")) return result;
+
+    const stmt = db.prepare("DELETE FROM routing_events WHERE ts < ?");
+    const runResult = stmt.run(cutoffISO);
+    result.deleted = runResult.changes;
+
+    console.log(
+      `[Cleanup] Deleted ${result.deleted} routing_events older than ${BACKEND_ANALYSIS_RETENTION_DAYS} days`
+    );
+  } catch (err: unknown) {
+    console.error("[Cleanup] Error cleaning routing_events:", err);
+    result.errors++;
+  }
+
+  return result;
+}
+
+/**
+ * Clean up old runtime_state_snapshots rows (nnd.25 backend analysis).
+ */
+export async function cleanupRuntimeStateSnapshots(): Promise<CleanupResult> {
+  const db = getDbInstance();
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - BACKEND_ANALYSIS_RETENTION_DAYS);
+  const cutoffISO = cutoffDate.toISOString();
+
+  const result: CleanupResult = { deleted: 0, errors: 0 };
+
+  try {
+    if (!tableExists("runtime_state_snapshots")) return result;
+
+    const stmt = db.prepare("DELETE FROM runtime_state_snapshots WHERE ts < ?");
+    const runResult = stmt.run(cutoffISO);
+    result.deleted = runResult.changes;
+
+    console.log(
+      `[Cleanup] Deleted ${result.deleted} runtime_state_snapshots older than ${BACKEND_ANALYSIS_RETENTION_DAYS} days`
+    );
+  } catch (err: unknown) {
+    console.error("[Cleanup] Error cleaning runtime_state_snapshots:", err);
+    result.errors++;
+  }
+
+  return result;
+}
+
+/**
  * Run all cleanup functions if auto-cleanup is enabled.
  */
 export async function runAutoCleanup(): Promise<{
@@ -563,6 +630,8 @@ export async function runAutoCleanup(): Promise<{
     ccrBlocks: await cleanupCcrBlocks(),
     conversationTurnNodes: await cleanupConversationTurnNodes(),
     agenticConversations: await cleanupAgenticConversations(),
+    routingEvents: await cleanupRoutingEvents(),
+    runtimeStateSnapshots: await cleanupRuntimeStateSnapshots(),
   };
 
   const totalDeleted = Object.values(results).reduce((sum, r) => sum + r.deleted, 0);
