@@ -9,7 +9,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-const source = fs.readFileSync("open-sse/services/combo.ts", "utf8");
+// 51合并后跳过点拆进 executeTargetGates(策略路径)与 roundRobinCombo(RR路径)
+const source =
+  fs.readFileSync("open-sse/services/combo/executeTargetGates.ts", "utf8") +
+  "\n" +
+  fs.readFileSync("open-sse/services/combo/roundRobinCombo.ts", "utf8");
 
 test("strategy-path admission skip logs a structured warn with reason and code", () => {
   const idx = source.indexOf("Skipping ${modelStr} — admission lane full");

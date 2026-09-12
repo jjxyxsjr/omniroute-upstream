@@ -7,6 +7,8 @@
 
 import { errorResponseWithComboDiagnostics } from "../utils/error.ts";
 import { resolveComboStartupBudgetMs } from "./combo/comboPredicates.ts";
+import { isModelLocked } from "./accountFallback.ts";
+import { isAccountSemaphoreFull } from "./accountSemaphore.ts";
 
 import { recordComboFailure } from "./combo/failureTracker.ts";
 import { buildRecoveryHint } from "./combo/pinRecovery.ts";
@@ -577,12 +579,47 @@ export async function buildAutoCandidates(
   // Filter out candidates whose model is hidden by the user in the dashboard,
   // then drop vendor-retired ids so auto-combo cannot pick them (#11625).
   maybeWarnBootstrapDominant(hasStats);
-  return rejectRetiredAutoComboCandidates(
+  const visibleCandidates = rejectRetiredAutoComboCandidates(
     candidates.filter((c) => {
       const hiddenModels = hiddenModelsMap.get(c.provider);
       return !hiddenModels?.has(c.model);
     })
   );
+  // 007-a1 (replayed per 156 §五): also drop candidates whose (provider,
+  // connection, model) is currently model-locked, or whose connection is inside
+  // an active rateLimitedUntil cooldown. Without this, a stale quota cache can
+  // keep a dead connection's reset-aware score high enough to WIN candidate
+  // selection; auth then finds no credentials and the combo 503s with
+  // ALL_ACCOUNTS_INACTIVE (2026-08-21 incident, deploy docs/190 §3.A1).
+  // 连接索引复用本函数上方 L351 的 connectionById(credentials 快照构建)。
+  const visibilityKept = visibleCandidates.filter((c) => {
+    if (c.connectionId) {
+      if (isModelLocked(c.provider, c.connectionId, c.model)) return false;
+      const conn = connectionById.get(c.connectionId) as
+        | { rateLimitedUntil?: string | number | null }
+        | undefined;
+      const cooldownUntil =
+        conn?.rateLimitedUntil == null ? NaN : new Date(conn.rateLimitedUntil).getTime();
+      if (Number.isFinite(cooldownUntil) && cooldownUntil > Date.now()) return false;
+    }
+    return true;
+  });
+  // 010 (saturation spillover, replayed): auto candidates whose connection's
+  // account semaphore is at capacity are skipped before winner election; when
+  // every candidate is saturated the unfiltered list is kept — this filter must
+  // never empty the candidate set; queueing remains the floor (semantics the
+  // upstream dispatch gate does NOT have — it 503s instead).
+  const saturationKept = visibilityKept.filter((c) => {
+    if (!c.connectionId) return true;
+    const conn = connectionById.get(c.connectionId) as
+      | { maxConcurrent?: number | null; max_concurrent?: number | null }
+      | undefined;
+    const raw = conn?.maxConcurrent ?? conn?.max_concurrent;
+    const cap = typeof raw === "number" ? raw : Number(raw);
+    if (!Number.isFinite(cap) || cap <= 0) return true;
+    return !isAccountSemaphoreFull(c.provider, c.connectionId, cap);
+  });
+  return saturationKept.length > 0 ? saturationKept : visibilityKept;
 }
 
 // Context-cache pin health gate — moved to combo/dispatchPrelude.ts alongside the

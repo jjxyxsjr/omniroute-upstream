@@ -431,6 +431,11 @@ function isSchemaAlreadyApplied(
   migration: { version: string; name: string }
 ): boolean {
   switch (migration.version) {
+    // nnd merge guard (2026-09-12): our ttft/queue_wait migration shipped as
+    // 163 in the fork while upstream 51 took 163 for radar_feed_cache; fork
+    // DBs that already applied old-163 have the ttft_ms column — skip re-run.
+    case "176":
+      return hasColumn(db, "call_logs", "ttft_ms");
     case "003":
       return hasColumn(db, "provider_nodes", "chat_path");
     case "095":
