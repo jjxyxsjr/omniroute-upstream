@@ -443,9 +443,12 @@ export async function handleRoundRobinCombo({
   // it fires, rrExpired flips and every subsequent model attempt short-circuits
   // to the 504. Cleaned up in the loop's finally.
   const rrConfiguredTimeoutMs = (config as { comboTimeoutMs?: number }).comboTimeoutMs ?? 0;
-  // nnd.23 ①: the startup budget must SHRINK rotation, never the safety
-  // floor — see comboAttemptLoop.ts for the same Math.max on the serial path.
-  const rrLoopSafetyMs = Math.max(rrConfiguredTimeoutMs, COMBO_LOOP_SAFETY_TIMEOUT_MS);
+  // nnd.23 ①: floor applies only to the env-woken default, never to an
+  // explicit per-combo timeout (see comboAttemptLoop.ts twin).
+  const rrLoopSafetyMs =
+    rrConfiguredTimeoutMs > 0
+      ? rrConfiguredTimeoutMs
+      : Math.max(rrConfiguredTimeoutMs, COMBO_LOOP_SAFETY_TIMEOUT_MS);
   let rrExpired = false;
   let rrLoopSafetyTimer: ReturnType<typeof setTimeout> | null = null;
   let rrResolveSafety: ((res: Response) => void) | null = null;

@@ -128,13 +128,14 @@ test("source guard: auth.ts skips model lockout for per-model-quota providers on
   );
 });
 
-test("source guard: combo.ts skips provider cooldown for per-model-quota on 500", () => {
+// 51 合并后 combo.ts 拆解:该守卫语义随冷却记录迁入 executeTargetAttempt.ts。
+test("source guard: executeTargetAttempt skips provider cooldown for per-model-quota on 500", () => {
   const src = fs.readFileSync(
-    path.join(process.cwd(), "open-sse", "services", "combo.ts"),
+    path.join(process.cwd(), "open-sse", "services", "combo", "executeTargetAttempt.ts"),
     "utf-8"
   );
   assert.ok(
     src.includes("hasPerModelQuota(provider, rawModel)") && src.includes("recordProviderCooldown"),
-    "combo.ts must skip provider cooldown recording for per-model-quota providers on 500"
+    "executeTargetAttempt.ts must skip provider cooldown recording for per-model-quota providers on 500"
   );
 });

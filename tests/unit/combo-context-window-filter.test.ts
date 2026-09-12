@@ -192,7 +192,10 @@ test("all known-too-small context targets still fall back to strategy order", ()
   );
 });
 
-test("output-token limits remain a hard compatibility requirement", () => {
+// fork(#33, nnd.12): output_tokens 是软信号不再是硬过滤——超限唯一目标被硬剔
+// 曾直接 400 capability_mismatch(2026-09-02 生产事故);现在钳制出站(011/#
+// 33)而保留候选。上游断言的"hard"语义在 fork 中已废除,随 fork 调整。
+test("output-token limits are a SOFT signal in this fork (#33)", () => {
   saveModelsDevCapabilities({
     "unit-output-limit": {
       insufficient: capabilityEntryWithLimits(128_000, 128_000, 128),
@@ -208,7 +211,7 @@ test("output-token limits remain a hard compatibility requirement", () => {
 
   assert.deepEqual(
     out.map((entry) => entry.modelStr),
-    ["unit-output-limit/sufficient"]
+    ["unit-output-limit/insufficient", "unit-output-limit/sufficient"]
   );
 });
 
@@ -517,10 +520,12 @@ test("#12273 single compatible target that fits is still collapsed", () => {
   );
 });
 
-// #12278: unknown context is advisory, not "known too small". Collapsing to a
-// single survivor whose context limit is unknown must NOT restore hard-rejected
-// targets (output_tokens here; vision is covered by combo-vision-aware-routing).
-test("#12273 unknown-context sole survivor does not restore hard-rejected targets", () => {
+// #12278: unknown context is advisory, not "known too small". In upstream this
+// guard keeps output_tokens a HARD rejection; fork #33 made output_tokens a
+// soft signal (the oversized-target hard drop 400'd a sole target in
+// production, 2026-09-02), so the tiny target now SURVIVES alongside the
+// unknown-context survivor.
+test("#12273 unknown-context sole survivor keeps the soft output target (#33 fork)", () => {
   saveModelsDevCapabilities({
     "unit-output": {
       tiny: capabilityEntryWithLimits(128_000, 128_000, 4096),
@@ -539,6 +544,6 @@ test("#12273 unknown-context sole survivor does not restore hard-rejected target
 
   assert.deepEqual(
     out.map((entry) => entry.modelStr),
-    ["unit-unknown/mystery"]
+    ["unit-unknown/mystery", "unit-output/tiny"]
   );
 });

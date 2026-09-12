@@ -1003,9 +1003,15 @@ async function handleComboChatInner({
   );
   const comboCooldownAttempt = { current: 0 };
   const comboCooldownBudgetLeftMs = { current: resilienceSettings.comboCooldownWait.budgetMs };
-  // nnd.23 ①: wake the dormant rotation cutoff (setup already resolves the
-  // env default; this local re-read keeps per-call config precedence).
-  const comboTimeoutMs = config.comboTimeoutMs || resolveComboStartupBudgetMs();
+  // nnd.23 ①: wake the dormant rotation cutoff. Per-call config takes
+  // precedence (explicit comboTimeoutMs > 0 is honored verbatim — never
+  // floored); only the env-woken default gets the 10min safety floor so the
+  // budget shrinks rotation without killing legitimate in-flight generations.
+  const explicitComboTimeoutMs =
+    typeof config.comboTimeoutMs === "number" && config.comboTimeoutMs > 0
+      ? config.comboTimeoutMs
+      : null;
+  const comboTimeoutMs = explicitComboTimeoutMs ?? resolveComboStartupBudgetMs();
   const comboStartTime = Date.now();
 
   const state: AttemptLoopState = {

@@ -150,10 +150,13 @@ export async function dispatchWithCooldownRetry(opts: {
       // actionable 504 instead of dying silently. `state.comboExpired` is flipped so the
       // target loop stops launching new work; the existing state.comboExpired branch
       // returns the aggregated 504.
-      // nnd.23 ①: the startup budget must SHRINK rotation, never the safety
-      // floor — a tight budget would otherwise kill legitimately long
-      // NON-streaming generations still inside their single attempt.
-      const loopSafetyMs = Math.max(extra.comboTimeoutMs, COMBO_LOOP_SAFETY_TIMEOUT_MS);
+      // nnd.23 ①: the safety floor protects only the env-woken DEFAULT budget —
+      // an explicit per-combo comboTimeoutMs is honored verbatim (per-call
+      // precedence; upstream G1's tight-budget hang test depends on this).
+      const loopSafetyMs =
+        extra.comboTimeoutMs > 0
+          ? extra.comboTimeoutMs
+          : Math.max(extra.comboTimeoutMs, COMBO_LOOP_SAFETY_TIMEOUT_MS);
       let loopSafetyFired = false;
       let loopSafetyTimer: ReturnType<typeof setTimeout> | null = null;
       const loopSafetyPromise = new Promise<Response>((resolve) => {
