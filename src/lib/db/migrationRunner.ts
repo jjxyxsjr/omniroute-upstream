@@ -431,10 +431,15 @@ function isSchemaAlreadyApplied(
   migration: { version: string; name: string }
 ): boolean {
   switch (migration.version) {
-    // nnd merge guard (2026-09-12): our ttft/queue_wait migration shipped as
-    // 163 in the fork while upstream 51 took 163 for radar_feed_cache; fork
-    // DBs that already applied old-163 have the ttft_ms column — skip re-run.
-    case "176":
+    // nnd merge guard (2026-09-12, renamed twice): our ttft/queue_wait migration
+    // shipped as 163 in the fork; upstream 51 took 163 (radar_feed_cache) → we
+    // renamed to 176; the 51 increment then took 176 too (xp_action_counts) →
+    // renamed to 177. Fork DBs that applied an older number have the ttft_ms
+    // column — skip re-run. NOTE: ledger tracking is version-only, so fork DBs
+    // that recorded old-176 will version-skip upstream's 176_xp_action_counts;
+    // its SQL is idempotent (CREATE TABLE IF NOT EXISTS + INSERT OR IGNORE) —
+    // apply it manually once at upgrade (see deploy/docs/156 §十二).
+    case "177":
       return hasColumn(db, "call_logs", "ttft_ms");
     case "003":
       return hasColumn(db, "provider_nodes", "chat_path");
