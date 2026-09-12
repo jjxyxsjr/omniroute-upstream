@@ -55,8 +55,13 @@ test("#2247 — early-return on runtime diagnosis short-circuits upstream test",
   // The caller must check runtime?.diagnosis first and not fall through to
   // upstream auth tests (which is what produces the cascading 401).
   const runtimeBlock = source.split("getProviderRuntimeStatus(connection);")[1] || "";
+  // nnd fork (155 #18): between the runtime probe and the diagnosis check the
+  // route also runs two null-fallthrough liveness probes (upstream codex
+  // app-server /readyz + our non-billed Ark plan V4 probe), so the window is
+  // widened from 600 to 1200 chars. The diagnosis branch still comes FIRST in
+  // the if/else chain — before any auth test — which is the actual contract.
   assert.match(
-    runtimeBlock.slice(0, 600),
+    runtimeBlock.slice(0, 1200),
     /if \(\(runtime as any\)\?\.diagnosis\)/,
     "expected the route to check runtime?.diagnosis immediately after getProviderRuntimeStatus()"
   );

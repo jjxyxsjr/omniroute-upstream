@@ -74,11 +74,22 @@ test("normalizeSystemRole merges system and developer content into the first use
 
   const result = normalizeSystemRole(messages, "openai", "glm-4.5");
 
+  // nnd fork (155 #8 009 vision-safe system fold): when the first user message
+  // carries ARRAY content the fold must stay structure-preserving — the folded
+  // text is emitted as a leading text part instead of collapsing the message to
+  // a plain string (which would delete image/file parts). String-content inputs
+  // keep the legacy single-string shape (covered by the tests below). Image
+  // preservation itself has a dedicated suite:
+  // tests/unit/role-normalizer-vision-fold-009.test.ts
   assert.deepEqual(result, [
     {
       role: "user",
-      content:
-        "[System Instructions]\nfollow policy\n\nprefer concise answers\n\n[User Message]\nsay hello",
+      content: [
+        {
+          type: "text",
+          text: "[System Instructions]\nfollow policy\n\nprefer concise answers\n\n[User Message]\nsay hello",
+        },
+      ],
     },
     { role: "assistant", content: "prior answer" },
   ]);

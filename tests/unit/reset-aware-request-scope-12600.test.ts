@@ -86,8 +86,12 @@ test("opposite-family-only telemetry fails open as unknown", () => {
 
   assert.equal(gemini, null);
   assert.equal(claude, null);
-  assert.equal(scoreResetAwareQuota(gemini, resolveResetAwareConfig({})).score, 0.5);
-  assert.equal(scoreResetAwareQuota(claude, resolveResetAwareConfig({})).score, 0.5);
+  // nnd fork (155 #7 003c): the no-quota floor is env-dialable and defaults to
+  // 0.35 instead of upstream's 0.5 constant, so no-fetcher providers no longer
+  // outrank healthy GLM sessions. Default + env dial are covered in full by
+  // tests/unit/quota-score-no-data-floor-003.test.ts.
+  assert.equal(scoreResetAwareQuota(gemini, resolveResetAwareConfig({})).score, 0.35);
+  assert.equal(scoreResetAwareQuota(claude, resolveResetAwareConfig({})).score, 0.35);
 });
 
 test("Claude family excludes unknown weekly buckets", () => {
