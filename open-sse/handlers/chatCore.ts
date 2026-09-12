@@ -376,7 +376,6 @@ import {
   acquireMany as acquireConcurrencyGates,
   markBlocked as markAccountSemaphoreBlocked,
 } from "../services/accountSemaphore.ts";
-import { lockExactModel } from "../services/accountFallback.ts";
 import {
   lockModel,
   lockModelIfPerModelQuota,
@@ -4893,15 +4892,27 @@ export async function handleChatCore({
         // live here re-sent the FAILING provider's credentials to the emergency
         // provider's endpoint (e.g. the OpenAI API key to integrate.api.nvidia.com)
         // — a cross-provider credential leak that also never succeeded upstream.
-        return createErrorResult(
-          statusCode,
-          errMsg,
-          retryAfterMs,
-          upstreamErrorCode,
-          upstreamErrorType,
-          upstreamErrorBody,
-          { passthrough: sourceFormat === FORMATS.CLAUDE }
-        );
+        return {
+          ...createErrorResult(
+            statusCode,
+            errMsg,
+            retryAfterMs,
+            upstreamErrorCode,
+            upstreamErrorType,
+            upstreamErrorBody,
+            { passthrough: sourceFormat === FORMATS.CLAUDE }
+          ),
+          // nnd.21 候C: executor inner-gate stream-readiness failures carry their
+          // zero-first-byte signal here (see providerFailure top) so the routing
+          // layer's switch gate sees a defined value. Other failures stay signal-free.
+          ...(readinessAnyByteAt !== undefined &&
+          (upstreamErrorType === "stream_timeout" ||
+            upstreamErrorCode === "STREAM_READINESS_TIMEOUT" ||
+            upstreamErrorType === "stream_early_eof" ||
+            upstreamErrorCode === "STREAM_EARLY_EOF")
+            ? { anyByteAt: readinessAnyByteAt }
+            : {}),
+        };
       }
       // ── End T5 ───────────────────────────────────────────────────────────────
     }
