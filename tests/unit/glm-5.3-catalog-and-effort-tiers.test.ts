@@ -150,7 +150,6 @@ for (const provider of ["glm", "glm-cn", "glmt"]) {
   });
 }
 
-<<<<<<< HEAD
 test("GLM-5.3-Flash is registered on shared GLM providers (1M ctx / 128K out / vision / max-default effort)", () => {
   // 2026-08-26 native-multimodal release; thinking cannot be disabled and text
   // params match GLM-5.3 (reasoning_effort low|high|max, default max).
@@ -176,10 +175,13 @@ test("modelSpecs carries the 1M/128K spec for glm-5.3-flash", () => {
   assert.equal(spec.supportsTools, true);
 });
 
-test("GLM_PRICING covers glm-5.3-flash with GLM-5.3 parity", () => {
+// 51 合并:上游带来 models.dev 实测费率(0.075/0.25),fork 原"未发布按 5.3
+// 镜像"假设作废,断言随真实费率调整。
+test("GLM_PRICING covers glm-5.3-flash with published flash rates", () => {
   const pricing = GLM_PRICING["glm-5.3-flash"];
   assert.ok(pricing, "GLM_PRICING should include glm-5.3-flash");
-  assert.deepEqual(pricing, GLM_PRICING["glm-5.3"]);
+  assert.equal(pricing.input, 0.075);
+  assert.equal(pricing.output, 0.25);
 });
 
 test("zai advertises the GLM-5.3 base model and GLM-5.3 Flash (DefaultExecutor sends ids verbatim)", () => {

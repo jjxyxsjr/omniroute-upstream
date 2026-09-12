@@ -159,5 +159,10 @@ test("large output request: unknown maxOutputTokens does not filter a target", (
   );
   const ids = out.map((t) => t.modelStr);
 
-  assert.deepEqual(ids, ["openai-compatible-local/custom-large-output-model"]);
+  // fork(#33): output_tokens 是软信号——已知小上限的 gpt-4o-mini 也保留
+  // (上游硬过滤语义在本 fork 已废除,随 fork 调整)。
+  assert.deepEqual(ids, [
+    "openai-compatible-local/custom-large-output-model",
+    "openai/gpt-4o-mini",
+  ]);
 });

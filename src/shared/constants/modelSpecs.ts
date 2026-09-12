@@ -606,13 +606,6 @@ export const MODEL_SPECS: Record<string, ModelSpec> = {
     supportsThinking: true,
     supportsTools: true,
   },
-  "glm-5.3-flash": {
-    maxOutputTokens: 131072,
-    contextWindow: 1000000,
-    thinkingBudgetCap: 38912,
-    supportsThinking: true,
-    supportsTools: true,
-  },
   "glm-5.3-max": {
     maxOutputTokens: 131072,
     contextWindow: 1000000,
