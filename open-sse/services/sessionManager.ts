@@ -46,7 +46,9 @@ const MAX_SESSIONS = 200;
 // coding-agent turns space 20-40 min apart; expiring the session tracking
 // mid-task lost continuity signals downstream (stickiness, turn tracking).
 // nnd.17: aligned with stickiness TTL — 60 min default, env-tunable.
-const SESSION_TTL_MS = resolveTtlMinutesFromEnv("OMNIROUTE_SESSION_TTL_MIN", 60);
+// nnd.25: exported so TTL-relative tests derive boundaries from the live value
+// instead of hardcoding upstream's 15min (fork/upstream TTL divergence).
+export const SESSION_TTL_MS = resolveTtlMinutesFromEnv("OMNIROUTE_SESSION_TTL_MIN", 60);
 const _cleanupTimer = setInterval(() => {
   const now = Date.now();
   // Evict expired sessions

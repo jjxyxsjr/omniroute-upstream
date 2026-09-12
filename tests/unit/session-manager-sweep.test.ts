@@ -18,10 +18,13 @@ test("MAX_SESSIONS constant exists and is 200", () => {
   assert.equal(Number(match[1]), 200, "MAX_SESSIONS must be 200");
 });
 
-test("SESSION_TTL_MS is 15 minutes (15 * 60 * 1000)", () => {
+// nnd fork 语义（sessionManager.ts nnd.17 注释在案）：TTL=env OMNIROUTE_SESSION_TTL_MIN
+// 可配、默认 60 分（编码代理回合间隔 20-40 分，15 分会腰斩粘性/轮次追踪）——上游是硬 15 分。
+// 常量断言随 fork 口径；行为测试全部以导出的 SESSION_TTL_MS 推导边界，两种 TTL 下都成立。
+test("SESSION_TTL_MS is env-tunable with fork default 60min (nnd.17)", () => {
   assert.ok(
-    src.includes("15 * 60 * 1000"),
-    "SESSION_TTL_MS should be 15 * 60 * 1000"
+    src.includes('resolveTtlMinutesFromEnv("OMNIROUTE_SESSION_TTL_MIN", 60)'),
+    "fork semantics: SESSION_TTL_MS resolves from OMNIROUTE_SESSION_TTL_MIN, default 60min"
   );
 });
 
@@ -333,9 +336,9 @@ test("getSessionInfo returns null for expired session (TTL behavioral)", () => {
   const info1 = mod.getSessionInfo("ttl-expire");
   assert.ok(info1, "session should exist immediately after creation");
 
-  fakeNow += 16 * 60 * 1000;
+  fakeNow += mod.SESSION_TTL_MS + 60_000;
   const info2 = mod.getSessionInfo("ttl-expire");
-  assert.equal(info2, null, "session should be expired after 16 minutes");
+  assert.equal(info2, null, "session should be expired past TTL");
 
   Date.now = realNow;
   mod.clearSessions();
@@ -348,9 +351,9 @@ test("getSessionInfo returns data for session within TTL (not expired)", () => {
   Date.now = () => fakeNow;
 
   mod.touchSession("ttl-alive");
-  fakeNow += 14 * 60 * 1000;
+  fakeNow += mod.SESSION_TTL_MS - 60_000;
   const info = mod.getSessionInfo("ttl-alive");
-  assert.ok(info, "session should still be alive at 14 minutes");
+  assert.ok(info, "session should still be alive just inside TTL");
   assert.equal(info.requestCount, 1);
 
   Date.now = realNow;
@@ -367,10 +370,10 @@ test("getActiveSessions excludes expired sessions (behavioral)", () => {
 
   mod.touchSession("active-1");
   mod.touchSession("active-2");
-  fakeNow += 5 * 60 * 1000;
+  fakeNow += Math.floor(mod.SESSION_TTL_MS / 3);
   mod.touchSession("active-3");
 
-  fakeNow += 11 * 60 * 1000 + 1;
+  fakeNow += mod.SESSION_TTL_MS - Math.floor(mod.SESSION_TTL_MS / 3) + 1;
 
   const sessions = mod.getActiveSessions();
   const ids = sessions.map((s) => s.sessionId);
@@ -393,10 +396,10 @@ test("touchSession refreshes lastActive so session survives TTL", () => {
 
   mod.touchSession("refresh-sess");
 
-  fakeNow += 14 * 60 * 1000;
+  fakeNow += mod.SESSION_TTL_MS - 60_000;
   mod.touchSession("refresh-sess");
 
-  fakeNow += 14 * 60 * 1000;
+  fakeNow += mod.SESSION_TTL_MS - 60_000;
   const info = mod.getSessionInfo("refresh-sess");
   assert.ok(info, "session should survive because lastActive was refreshed");
   assert.equal(info.requestCount, 2);
@@ -445,7 +448,7 @@ test("mixed sessions: expired ones gone, fresh ones survive after TTL check", ()
     mod.touchSession(`old-${i}`);
   }
 
-  fakeNow += 16 * 60 * 1000;
+  fakeNow += mod.SESSION_TTL_MS + 60_000;
 
   for (let i = 0; i < 10; i++) {
     mod.touchSession(`new-${i}`);
@@ -493,9 +496,9 @@ test("session expires at SESSION_TTL_MS + 1ms boundary", () => {
 
   mod.touchSession("boundary-sess");
 
-  fakeNow += 15 * 60 * 1000 + 1;
+  fakeNow += mod.SESSION_TTL_MS + 1;
   const info = mod.getSessionInfo("boundary-sess");
-  assert.equal(info, null, "session at 15 min + 1ms should be expired");
+  assert.equal(info, null, "session at TTL + 1ms should be expired");
 
   Date.now = realNow;
   mod.clearSessions();

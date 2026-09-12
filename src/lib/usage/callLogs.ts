@@ -559,6 +559,12 @@ async function saveCallLogOperation(entry: any): Promise<void> {
         entry.queueWaitMs >= 0
           ? Math.round(entry.queueWaitMs)
           : null,
+      // nnd.25 埋点（deploy/docs/157 §六-1）：错误响应线路形态原文头（未 JSON.parse
+      // 还原，\u003c 等转义形保留）——error_summary 截断+还原形失真双重坑的根治位。
+      errorRawHead:
+        typeof entry.errorRawHead === "string" && entry.errorRawHead.length > 0
+          ? entry.errorRawHead.slice(0, 512)
+          : null,
       // #12150 P2 surface 2: 1 when this request's persisted client snapshot had
       // its video transcript cues structurally redacted, so
       // resolvePreviousResponseState refuses to rehydrate it as continuation
@@ -613,7 +619,7 @@ async function saveCallLogOperation(entry: any): Promise<void> {
         artifact_relpath, artifact_size_bytes, artifact_sha256,
         has_request_body, has_response_body, has_pipeline_details, request_summary,
         correlation_id, model_pinned, session_tag, response_id, error_type, ttft_ms,
-        queue_wait_ms, video_content_removed
+        queue_wait_ms, video_content_removed, error_raw_head
       )
       VALUES (
         @id, @timestamp, @method, @path, @status, @model, @requestedModel, @provider,
@@ -625,7 +631,7 @@ async function saveCallLogOperation(entry: any): Promise<void> {
         @artifactRelPath, @artifactSizeBytes, @artifactSha256,
         @hasRequestBody, @hasResponseBody, @hasPipelineDetails, @requestSummary,
         @correlationId, @modelPinned, @sessionTag, @responseId, @errorType, @ttftMs,
-        @queueWaitMs, @videoContentRemoved
+        @queueWaitMs, @videoContentRemoved, @errorRawHead
       )
     `
     ).run({

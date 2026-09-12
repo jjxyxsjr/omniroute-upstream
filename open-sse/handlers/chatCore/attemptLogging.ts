@@ -250,6 +250,12 @@ export type PersistAttemptLogsContext = {
    */
   getQueueWaitMs?: () => number | null;
   /**
+   * nnd.25 埋点（deploy/docs/157 §六-1）：惰性读取请求级错误原文头——
+   * providerFailure 捕获的错误响应线路形态首 512 字符（转义形保留，未经
+   * JSON.parse 还原）。非错误请求恒 undefined。落 call_logs.error_raw_head。
+   */
+  getErrorRawHead?: () => string | undefined;
+  /**
    * #12150 P1b: video-bridge structured-redaction shadow (P1a's
    * `meta.videoBridgeLogRedaction`), threaded from chat.ts's
    * `preCallGuardrails.results` down through handleChatCore. When present,
@@ -386,6 +392,7 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
     modelPinned,
     sessionTag,
     getQueueWaitMs,
+    getErrorRawHead,
     videoBridgeLogRedaction,
     videoContentRemoved,
   } = ctx;
@@ -523,6 +530,10 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
     queueWaitMs: (() => {
       const q = getQueueWaitMs?.();
       return typeof q === "number" && Number.isFinite(q) && q >= 0 ? q : null;
+    })(),
+    errorRawHead: (() => {
+      const h = getErrorRawHead?.();
+      return typeof h === "string" && h.length > 0 ? h : null;
     })(),
     videoContentRemoved: videoContentRemoved || false,
   }).catch(() => {});

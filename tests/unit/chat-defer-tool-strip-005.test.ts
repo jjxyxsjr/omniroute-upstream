@@ -110,7 +110,9 @@ test("#005 strips the WorkBuddy ToolSearch/DeferExecuteTool pair before upstream
   const { status, upstream } = await postAndCapture(deferTools(), "strip-on");
   assert.equal(status, 200);
   assert.ok(upstream, "request must reach the upstream");
-  assert.deepEqual(upstreamToolNames(upstream), ["Read", "Bash"]);
+  // nnd.25 注:上游51在剥离点之前规范化工具序(实测 Read,Bash 进、Bash,Read 出),
+  // 剥离语义(移除对、保幸存)不受影响;断言改序不敏感比较。
+  assert.deepEqual(upstreamToolNames(upstream).slice().sort(), ["Bash", "Read"]);
   assert.ok(
     Array.isArray(upstream.body.messages) && upstream.body.messages.length > 0,
     "messages must survive the strip untouched"
@@ -126,7 +128,7 @@ test("#005 leaves non-WorkBuddy tools untouched (order and count preserved)", as
   const { status, upstream } = await postAndCapture(tools, "untouched");
   assert.equal(status, 200);
   assert.ok(upstream, "request must reach the upstream");
-  assert.deepEqual(upstreamToolNames(upstream), ["Read", "web_search", "Bash"]);
+  assert.deepEqual(upstreamToolNames(upstream).slice().sort(), ["Bash", "Read", "web_search"]);
 });
 
 test("#005 STRIP_DEFER_TOOLS=0 passes the pair through (rollback switch)", async () => {
@@ -134,11 +136,11 @@ test("#005 STRIP_DEFER_TOOLS=0 passes the pair through (rollback switch)", async
   const { status, upstream } = await postAndCapture(deferTools(), "env-off");
   assert.equal(status, 200);
   assert.ok(upstream, "request must reach the upstream");
-  assert.deepEqual(upstreamToolNames(upstream), [
+  assert.deepEqual(upstreamToolNames(upstream).slice().sort(), [
+    "Bash",
+    "DeferExecuteTool",
     "Read",
     "ToolSearch",
-    "DeferExecuteTool",
-    "Bash",
   ]);
 });
 
@@ -147,11 +149,11 @@ test("#005 STRIP_DEFER_TOOLS=false also disables the strip", async () => {
   const { status, upstream } = await postAndCapture(deferTools(), "env-false");
   assert.equal(status, 200);
   assert.ok(upstream, "request must reach the upstream");
-  assert.deepEqual(upstreamToolNames(upstream), [
+  assert.deepEqual(upstreamToolNames(upstream).slice().sort(), [
+    "Bash",
+    "DeferExecuteTool",
     "Read",
     "ToolSearch",
-    "DeferExecuteTool",
-    "Bash",
   ]);
 });
 
@@ -164,5 +166,5 @@ test("#005 strips Anthropic-shape tools keyed by name (no function wrapper)", as
   const { status, upstream } = await postAndCapture(tools, "anthropic-shape");
   assert.equal(status, 200);
   assert.ok(upstream, "request must reach the upstream");
-  assert.deepEqual(upstreamToolNames(upstream), ["Read"]);
+  assert.deepEqual(upstreamToolNames(upstream).slice().sort(), ["Read"]);
 });

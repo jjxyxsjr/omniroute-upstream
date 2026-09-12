@@ -539,6 +539,10 @@ export async function handleChatCore({
   // first upstream content event arrived (set after ensureStreamReadiness).
   // TTFT = firstContent − dispatch; queue_wait = dispatch − startTime.
   let upstreamDispatchedAt: number | null = null;
+  // nnd.25 埋点（deploy/docs/157 §六-1）：请求级错误原文头（线路形态首 512 字符，
+  // 在 providerFailure 里捕获）。落 call_logs.error_raw_head——error_summary 截断
+  // +还原形失真是 max_tokens \u003c 案误诊两天的双重根源。
+  let errorRawHead: string | undefined;
   let upstreamFirstContentAt: number | null = null;
   // Per-request trace id + checkpoint helper. Lets us see exactly which await
   // a hung request was sitting on in `[STAGE_TRACE]` log lines. Uses crypto RNG
@@ -1092,6 +1096,7 @@ export async function handleChatCore({
       sessionTag: conversationId || explicitSessionIdHeader,
       getQueueWaitMs: () =>
         upstreamDispatchedAt !== null ? upstreamDispatchedAt - startTime : null,
+      getErrorRawHead: () => errorRawHead,
       // #12150 P1b surface 1: undefined for every non-video request (byte-identical
       // to before this param existed) — see applyVideoBridgeLogRedaction.
       videoBridgeLogRedaction: (videoBridgeLog as VideoBridgeLogParam | undefined)?.redaction,
@@ -4550,6 +4555,14 @@ export async function handleChatCore({
     const readinessAnyByteAt = parseAnyByteAtHeader(
       providerResponse.headers?.get?.(ANY_BYTE_AT_HEADER)
     );
+    // nnd.25 埋点（157 §六-1）：以线路原始形态捕获错误响应文本头 512 字符（在
+    // 任何 JSON.parse 还原之前，\u003c= 等转义形原样保留）。best-effort：body 若
+    // 已被更早的读取消费则 clone 抛错，静默降级为 undefined（成功请求零开销）。
+    errorRawHead = await providerResponse
+      .clone()
+      .text()
+      .then((t) => (t ? t.slice(0, 512) : undefined))
+      .catch(() => undefined);
       if (upstreamErrorParsed) {
         statusCode = parsedStatusCode;
         message = parsedMessage;
