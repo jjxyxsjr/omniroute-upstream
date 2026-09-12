@@ -27,10 +27,33 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { proxyFetch } from "../../open-sse/utils/proxyFetch.ts";
 import { getDefaultDispatcher, getRetryDispatcher } from "../../open-sse/utils/proxyDispatcher.ts";
 
+// nnd fork adaptation (deploy/docs/156 §四-2 "fetch 层两段窗是唯一真相源"):
+// upstream's flat second-attempt window made the both-attempts-hang case below
+// surface in ~2× OMNIROUTE_DIRECT_HEADERS_TIMEOUT_MS. Our fork aligns the
+// fresh-socket segment to max(pooledMs, STREAM_READINESS_MAX_TIMEOUT_MS)
+// (nnd.21 候A; code default 180 s, snapshotted when constants.ts is first
+// imported — hence this must run BEFORE the proxyFetch import below, and it
+// cannot ride on withFastTimeout, which mutates env after import). Waiting the
+// real 180 s here is untestable: the guard timers are unref()'d by design, so
+// the node:test child's event loop drains long before the window closes and
+// the runner cancels the whole file ("Promise resolution is still pending but
+// the event loop has already resolved"). Shrinking the alignment ceiling via
+// env keeps the classified DIRECT_RESPONSE_START_TIMEOUT surfacing through the
+// exact production code path at test scale; production windows are untouched
+// (env override scoped to this test process).
+process.env.STREAM_READINESS_MAX_TIMEOUT_MS = "100";
+const { proxyFetch } = await import("../../open-sse/utils/proxyFetch.ts");
+
 const DIRECT_RESPONSE_START_TIMEOUT_CODE = "DIRECT_RESPONSE_START_TIMEOUT";
+
+/** Same node:test sandbox pitfall as direct-fetch-fresh-socket-window-nnd21.test.ts:
+ * hold a ref'd heartbeat while a test awaits a hang segment whose guard timer
+ * is unref()'d, so the runner cannot declare the event loop settled mid-test. */
+function heartbeat(): ReturnType<typeof setTimeout> {
+  return setTimeout(() => {}, 30_000);
+}
 
 /** Simulates a silent half-open pooled socket: the request never resolves, but
  *  observes the abort signal like real undici does (rejects with the reason). */
@@ -62,74 +85,84 @@ function withFastTimeout<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 test("#10214 a response-start timeout on the pooled attempt retries on the FRESH no-keep-alive dispatcher", async () => {
-  const capture = { calls: 0, dispatchers: [] as unknown[] };
+  const hb = heartbeat();
+  try {
+    const capture = { calls: 0, dispatchers: [] as unknown[] };
 
-  const mockUndici = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    capture.calls++;
-    capture.dispatchers.push((init as { dispatcher?: unknown } | undefined)?.dispatcher);
-    if (capture.calls === 1) {
-      // First attempt hits a silently-dead pooled socket — hang, no error.
-      return new Promise<Response>((_, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
-      });
-    }
-    return new Response("ok", { status: 200 });
-  };
-  const mockNative = async (): Promise<Response> =>
-    new Response("native-should-not-fire", { status: 200 });
+    const mockUndici = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      capture.calls++;
+      capture.dispatchers.push((init as { dispatcher?: unknown } | undefined)?.dispatcher);
+      if (capture.calls === 1) {
+        // First attempt hits a silently-dead pooled socket — hang, no error.
+        return new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+        });
+      }
+      return new Response("ok", { status: 200 });
+    };
+    const mockNative = async (): Promise<Response> =>
+      new Response("native-should-not-fire", { status: 200 });
 
-  const res = await withFastTimeout(() =>
-    proxyFetch(
-      "https://opencode.ai/zen/go/v1/chat/completions",
-      { method: "POST" },
-      { undiciFetch: mockUndici, nativeFetch: mockNative }
-    )
-  );
-
-  assert.equal(capture.calls, 2, "pooled attempt times out and must retry once");
-  assert.equal(await res.text(), "ok");
-  // The regression guard: attempt 0 used the pooled keep-alive dispatcher; the
-  // retry used the fresh no-keep-alive dispatcher — a DIFFERENT instance, so the
-  // retry opens a brand-new socket that cannot be the zombie.
-  assert.equal(
-    capture.dispatchers[0],
-    getDefaultDispatcher(),
-    "first attempt must use the pooled default dispatcher"
-  );
-  assert.equal(
-    capture.dispatchers[1],
-    getRetryDispatcher(),
-    "timeout retry must use the fresh no-keep-alive dispatcher"
-  );
-  assert.notEqual(capture.dispatchers[0], capture.dispatchers[1]);
-});
-
-test("#10214 when the fresh-dispatcher retry also stalls, the timeout surfaces (no native fallback)", async () => {
-  const capture = { calls: 0, dispatchers: [] as unknown[] };
-  const mockUndici = hangingFetch(capture);
-  const mockNative = async (): Promise<Response> =>
-    new Response("native-should-not-fire", { status: 200 });
-
-  await assert.rejects(
-    withFastTimeout(() =>
+    const res = await withFastTimeout(() =>
       proxyFetch(
         "https://opencode.ai/zen/go/v1/chat/completions",
         { method: "POST" },
         { undiciFetch: mockUndici, nativeFetch: mockNative }
       )
-    ),
-    (err: unknown) => {
-      assert.equal(
-        (err as { code?: unknown }).code,
-        DIRECT_RESPONSE_START_TIMEOUT_CODE,
-        "final failure must be the classified direct response-start timeout"
-      );
-      return true;
-    }
-  );
-  assert.equal(capture.calls, 2, "both attempts must have been made");
-  assert.equal(capture.dispatchers[0], getDefaultDispatcher());
-  assert.equal(capture.dispatchers[1], getRetryDispatcher());
+    );
+
+    assert.equal(capture.calls, 2, "pooled attempt times out and must retry once");
+    assert.equal(await res.text(), "ok");
+    // The regression guard: attempt 0 used the pooled keep-alive dispatcher; the
+    // retry used the fresh no-keep-alive dispatcher — a DIFFERENT instance, so the
+    // retry opens a brand-new socket that cannot be the zombie.
+    assert.equal(
+      capture.dispatchers[0],
+      getDefaultDispatcher(),
+      "first attempt must use the pooled default dispatcher"
+    );
+    assert.equal(
+      capture.dispatchers[1],
+      getRetryDispatcher(),
+      "timeout retry must use the fresh no-keep-alive dispatcher"
+    );
+    assert.notEqual(capture.dispatchers[0], capture.dispatchers[1]);
+  } finally {
+    clearTimeout(hb);
+  }
+});
+
+test("#10214 when the fresh-dispatcher retry also stalls, the timeout surfaces (no native fallback)", async () => {
+  const hb = heartbeat();
+  try {
+    const capture = { calls: 0, dispatchers: [] as unknown[] };
+    const mockUndici = hangingFetch(capture);
+    const mockNative = async (): Promise<Response> =>
+      new Response("native-should-not-fire", { status: 200 });
+
+    await assert.rejects(
+      withFastTimeout(() =>
+        proxyFetch(
+          "https://opencode.ai/zen/go/v1/chat/completions",
+          { method: "POST" },
+          { undiciFetch: mockUndici, nativeFetch: mockNative }
+        )
+      ),
+      (err: unknown) => {
+        assert.equal(
+          (err as { code?: unknown }).code,
+          DIRECT_RESPONSE_START_TIMEOUT_CODE,
+          "final failure must be the classified direct response-start timeout"
+        );
+        return true;
+      }
+    );
+    assert.equal(capture.calls, 2, "both attempts must have been made");
+    assert.equal(capture.dispatchers[0], getDefaultDispatcher());
+    assert.equal(capture.dispatchers[1], getRetryDispatcher());
+  } finally {
+    clearTimeout(hb);
+  }
 });
 
 test("#10214 a healthy fast response is untouched by the bound (single attempt, no retry)", async () => {
