@@ -241,7 +241,11 @@ import {
   resolveResilienceSettings,
   isStreamRecoveryExplicitlyConfigured,
 } from "@/lib/resilience/settings";
-import { classifyProviderError, PROVIDER_ERROR_TYPES } from "../services/errorClassifier.ts";
+import {
+  classifyProviderError,
+  isEmptyContentResponse,
+  PROVIDER_ERROR_TYPES,
+} from "../services/errorClassifier.ts";
 import { updateProviderConnection, getProviderConnectionById } from "@/lib/db/providers";
 import { wasRefreshTokenRotated } from "@omniroute/open-sse/services/refreshSerializer.ts";
 import { connectionHasExtraKeys } from "../services/apiKeyRotator.ts";
@@ -4809,44 +4813,6 @@ export async function handleChatCore({
           { passthrough: sourceFormat === FORMATS.CLAUDE }
         );
       }
-    } else {
-      persistAttemptLogs({
-        status: statusCode,
-        error: errMsg,
-        providerRequest: finalBody || translatedBody,
-        providerResponse: upstreamErrorBody,
-        clientResponse: buildErrorBody(statusCode, errMsg),
-        cacheSource: "upstream",
-      });
-      persistFailureUsage(statusCode, `upstream_${statusCode}`);
-
-      // Emergency budget fallback is orchestrated exclusively by the routing layer
-      // (src/sse/handlers/chat.ts), which resolves credentials FOR the emergency
-      // provider through account selection. The executor-level hop that used to
-      // live here re-sent the FAILING provider's credentials to the emergency
-      // provider's endpoint (e.g., the OpenAI API key to integrate.api.nvidia.com)
-      // — a cross-provider credential leak that also never succeeded upstream.
-      return {
-        ...createErrorResult(
-          statusCode,
-          errMsg,
-          retryAfterMs,
-          upstreamErrorCode,
-          upstreamErrorType,
-          upstreamErrorBody,
-          { passthrough: sourceFormat === FORMATS.CLAUDE }
-        ),
-        // nnd.21 候C: executor inner-gate stream-readiness failures carry their
-        // zero-first-byte signal here (see providerFailure top) so the routing
-        // layer's switch gate sees a defined value. Other failures stay signal-free.
-        ...(readinessAnyByteAt !== undefined &&
-        (upstreamErrorType === "stream_timeout" ||
-          upstreamErrorCode === "STREAM_READINESS_TIMEOUT" ||
-          upstreamErrorType === "stream_early_eof" ||
-          upstreamErrorCode === "STREAM_EARLY_EOF")
-          ? { anyByteAt: readinessAnyByteAt }
-          : {}),
-      };
       // ── End T5 ───────────────────────────────────────────────────────────────
     }
   }
