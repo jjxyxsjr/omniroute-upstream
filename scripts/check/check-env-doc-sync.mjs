@@ -286,6 +286,18 @@ const ENV_ONLY_ALLOWLIST = new Set([
   // #12190: Trae host/Origin override. ENVIRONMENT.md documents no Trae variable at
   // all; this joins its two siblings above under the same .env.example-only tier.
   "TRAE_WEB_ORIGIN",
+  // nnd.25: fork operational knobs surfaced by the env-doc contract gate —
+  // documented with inline comments in .env.example; canonical registry is the
+  // fork's patch ledger (deploy/docs/155), not docs/reference/ENVIRONMENT.md.
+  "OMNIROUTE_ARK_QUOTA_PROVIDERS",
+  "OMNIROUTE_COMBO_MAX_DEADLINE_FAILURES",
+  "OMNIROUTE_KEEP_HIDDEN_COMBO_CANDIDATES",
+  "OMNIROUTE_RESET_AWARE_NO_QUOTA_FLOOR",
+  "STRIP_DEFER_TOOLS",
+  "VOLC_ARK_ACCESS_KEY_ID",
+  "VOLC_ARK_SECRET_ACCESS_KEY",
+  "OMNIROUTE_WAL_GUARD_MAX_MB",
+  "OMNIROUTE_WAL_PASSIVE_INTERVAL_MS",
 ]);
 
 // ─── Parsing helpers ───────────────────────────────────────────────────────

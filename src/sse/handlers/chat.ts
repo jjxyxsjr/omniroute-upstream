@@ -1693,6 +1693,11 @@ async function handleSingleModelChat(
   let requestRetryAttempt = 0;
   let requestRetryLastError = null;
   let requestRetryLastStatus = null;
+  // nnd.25: 当 8b 换席门 continue 后备选连接耗尽（典型：单连接池），退出路径会用
+  // lastError/lastStatus 重建泛码 504——把 streamReadiness 已带好的专用码
+  // （STREAM_READINESS_TIMEOUT + Retry-After:1）丢了。保留最后一份带码响应，
+  // 循环耗尽时原样透传（上游测试 chat-cooldown-aware-retry 断言此形态）。
+  let lastReadinessFailureResponse: Response | null = null;
   let requestRetryLastCooldownMs = 0;
   // Bug #3758: per-request counter bounding the early-close (STREAM_EARLY_EOF)
   // re-attempt to exactly one for the whole request. Declared outside both retry
@@ -1865,6 +1870,15 @@ async function handleSingleModelChat(
           excludedConnectionIds.size > 0
             ? Array.from(excludedConnectionIds)[excludedConnectionIds.size - 1]
             : null;
+        // nnd.25: 8b 换席耗尽备选时，透传最后那份带 STREAM_READINESS_TIMEOUT 码的
+        // 504（含 Retry-After:1）——比按 lastStatus 重建的泛码 gateway_timeout 对
+        // 客户端更诚实，也让标准重试工具能识别。
+        if (lastReadinessFailureResponse) {
+          return withSelectedConnectionHeader(
+            lastReadinessFailureResponse,
+            lastFailedConnectionId
+          );
+        }
         return withSelectedConnectionHeader(noCredsRes, lastFailedConnectionId);
       }
 
@@ -2171,6 +2185,8 @@ async function handleSingleModelChat(
           lastStatus = result.status;
           requestRetryLastError = lastError;
           requestRetryLastStatus = lastStatus;
+          // nnd.25: 备选耗尽时退出循环要透传这份带码响应（见声明处注释）。
+          lastReadinessFailureResponse = result.response;
           continue;
         }
 
