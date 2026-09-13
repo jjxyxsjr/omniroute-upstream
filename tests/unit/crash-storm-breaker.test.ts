@@ -113,6 +113,14 @@ test("source guard: 50-line wiring — chatCore hook + combo.ts executeTarget ga
   assert.match(gateRegion, /"crash_storm"/);
   assert.match(gateRegion, /stopProtectedPriorityTarget\(/);
 
+  // 喂点（主河道）：/v1/messages 全量经 src handleChat → combo 尝试环，失败在
+  // comboErrors.push 处收口（chatCore 侧钩是另一入口的河——实测旁路证明）。
+  // 质量 502（nnd.19 教训）与 body-specific 400 两个姊妹分支故意不喂。
+  const feedCall = combo.indexOf("recordCrashFailure(provider,");
+  assert.ok(feedCall > 0, "feed hook call not found in combo.ts");
+  const feedRegion = combo.slice(Math.max(0, feedCall - 800), feedCall + 200);
+  assert.match(feedRegion, /comboErrors\.push/);
+
   const trace = readFileSync(
     join(root, "open-sse", "services", "combo", "decisionTrace.ts"),
     "utf8"

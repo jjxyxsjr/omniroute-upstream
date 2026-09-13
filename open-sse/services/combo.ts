@@ -134,7 +134,7 @@ import type { ComboErrorEntry } from "./combo/comboErrorAggregation.ts";
 import type { CompressionMode } from "./compression/types.ts";
 import { getCachedProviderConnections } from "../../src/lib/db/readCache";
 import { isProviderInCooldown, recordProviderCooldown } from "./providerCooldownTracker.ts";
-import { isCrashStorming } from "./crashStormBreaker.ts";
+import { isCrashStorming, recordCrashFailure } from "./crashStormBreaker.ts";
 import {
   resolveResilienceSettings,
   type ResilienceSettings,
@@ -2455,6 +2455,10 @@ async function handleComboChatInner({
             error: errorText || String(result.status),
             kind: classifyComboOutcome(result.status, errorText),
           });
+          // nnd.25 崩溃风暴熔断取证（9-8 悬案根治）：combo 逐目标失败主河道——
+          // /v1/messages 全量经 src handleChat 进此环，chatCore 侧钩子覆盖不到；
+          // 在锁死/冷却挂点同位记一笔 provider×签名滑窗样本（5xx-only，含归一化）。
+          recordCrashFailure(provider, errorText || String(result.status), result.status);
           lastStatus = result.status;
           if (i > 0) fallbackCount++;
           // Wire combo failures into the resilience dashboard (model-level lockout)
