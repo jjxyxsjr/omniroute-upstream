@@ -83,6 +83,7 @@ import {
   readCodexTurnStateHeader,
 } from "../config/codexTurnState.ts";
 import { trackDevice, extractIpFromHeaders } from "../services/deviceTracker.ts";
+import { recordCrashFailure } from "../services/crashStormBreaker.ts";
 import { getCombosCached } from "./chatCore/comboContextCache.ts";
 export { clearCombosCache, clearUpstreamProxyConfigCache } from "./chatCore/comboContextCache.ts";
 import {
@@ -4123,6 +4124,11 @@ export async function handleChatCore({
         `${provider} ${restatement.fromStatus}→${statusCode} (${restatement.ruleId})`
       );
     }
+
+    // nnd.25 崩溃风暴熔断取证（9-8 悬案根治）：以最终 statusCode+message 记一笔
+    // provider×签名 滑窗样本。5xx-only；上游信誉机制（冷却/锁）不经此路——
+    // 熔断闸只跳 dispatch，不污染 provider 信誉（combo executeTarget crash_storm 门）。
+    recordCrashFailure(provider, message, statusCode);
 
     const signatureRecovery = await recoverAnthropicThinkingSignature({
       provider,

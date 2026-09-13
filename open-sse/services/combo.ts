@@ -134,6 +134,7 @@ import type { ComboErrorEntry } from "./combo/comboErrorAggregation.ts";
 import type { CompressionMode } from "./compression/types.ts";
 import { getCachedProviderConnections } from "../../src/lib/db/readCache";
 import { isProviderInCooldown, recordProviderCooldown } from "./providerCooldownTracker.ts";
+import { isCrashStorming } from "./crashStormBreaker.ts";
 import {
   resolveResilienceSettings,
   type ResilienceSettings,
@@ -1230,6 +1231,24 @@ async function handleComboChatInner({
           });
           if (i > 0) fallbackCount++;
           return stopProtectedPriorityTarget(`Provider ${provider} circuit breaker is open`);
+        }
+
+        // nnd.25 崩溃风暴熔断（9-8 悬案根治）：provider 熔断刻意排除本机执行错误（#12233），
+        // 请求路径代码炸弹（同签名快败洪流）由此闸兜住——storming provider 的目标本轮跳过，
+        // 健康道照常；窗口自然衰减即自愈，绝不写 provider 冷却/锁。
+        if (provider && isCrashStorming(provider)) {
+          log.warn("COMBO", `Skipping ${modelStr} — crash-storm breaker OPEN for ${provider}`, {
+            provider,
+            code: "CRASH_STORM_OPEN",
+          });
+          recordComboDecision(traceInvocationId, {
+            step: target.executionKey,
+            target: modelStr,
+            decision: "skipped_before_dispatch",
+            reason: "crash_storm",
+          });
+          if (i > 0) fallbackCount++;
+          return stopProtectedPriorityTarget(`Provider ${provider} crash-storm breaker is open`);
         }
 
         if (
