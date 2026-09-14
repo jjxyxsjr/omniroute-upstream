@@ -70,6 +70,7 @@ import { applyComboTargetExhaustion } from "./targetExhaustion.ts";
 import { pinNativeCodexTurn } from "./nativeCodexTurnPin.ts";
 import { recordComboDecision } from "./decisionTrace.ts";
 import { recordProviderCooldown } from "../providerCooldownTracker.ts";
+import { recordCrashFailure } from "../crashStormBreaker.ts";
 import {
   validateResponseQuality,
   releaseQualityClone,
@@ -1142,6 +1143,11 @@ export async function executeTargetAttempt(opts: {
       error: errorText || String(result.status),
       kind: classifyComboOutcome(result.status, errorText),
     });
+    // nnd.25 崩溃风暴熔断取证主河道移植（9-14；#75 原件同病补喂——chatCore 侧钩
+    // 覆盖不到 /v1/messages 经 src handleChat 进来的主河道）。质量 502（nnd.19
+    // 教训，上方 413 处）与 body-specific 400（上方 938 处）两个姊妹分支故意不喂；
+    // recordCrashFailure 内部仅记 5xx 且含签名归一化。
+    recordCrashFailure(provider, errorText || String(result.status), result.status);
     state.lastStatus = result.status;
     // nnd.20: readiness-deadline failure budget (replayed onto the upstream
     // decomposition per 156 §五). A stalled upstream (zero first byte / no

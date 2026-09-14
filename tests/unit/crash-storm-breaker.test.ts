@@ -170,3 +170,19 @@ test("source guard: chatCore providerFailure records into the breaker (hook stay
   assert.match(gates, /isCrashStorming\(/);
   assert.match(gates, /"crash_storm"/);
 });
+
+test("source guard: attempt-loop main-channel feed at comboErrors.push (nnd.25 喂点移植)", () => {
+  // nnd.25 教训（50 线实证）：chatCore 侧钩是另一入口的河——/v1/messages 全量
+  // 经 src handleChat → executeTargetAttempt 尝试环，失败在 comboErrors.push
+  // 处收口。喂点必须挂在主河道收口位；质量 502 与 body-400 姊妹分支故意不喂
+  // （全文件仅允许一处喂点调用）。
+  const src = readFileSync(
+    join(root, "open-sse", "services", "combo", "executeTargetAttempt.ts"),
+    "utf8"
+  );
+  const feedCount = src.split("recordCrashFailure(provider,").length - 1;
+  assert.equal(feedCount, 1, "feed hook must appear exactly once (sister branches stay unfed)");
+  const feedCall = src.indexOf("recordCrashFailure(provider,");
+  const feedRegion = src.slice(Math.max(0, feedCall - 800), feedCall + 200);
+  assert.match(feedRegion, /comboErrors\.push/);
+});
