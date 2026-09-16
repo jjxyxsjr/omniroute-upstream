@@ -66,3 +66,29 @@ describe("#80 chatCore wiring source guards", () => {
     );
   });
 });
+
+describe("#80b claude-body stream alignment (DefaultExecutor)", () => {
+  const source = readFileSync(
+    new URL("../../open-sse/executors/default.ts", import.meta.url),
+    "utf8"
+  );
+
+  test("transformRequest stamps executor stream on claude-format bodies", async () => {
+    const { DefaultExecutor } = await import("../../open-sse/executors/default.ts");
+    const exec = new DefaultExecutor("anthropic-compatible-test");
+    const claudeBody = {
+      model: "m",
+      max_tokens: 128,
+      stream: false, // client flag carried by translation — the 2026-09-16 trial catch
+      messages: [{ role: "user", content: "hi" }],
+    };
+    const out = exec.transformRequest("m", claudeBody, true, null) as Record<string, unknown>;
+    assert.equal(out.stream, true, "executor stream=true must overwrite the stale client flag");
+    const outOff = exec.transformRequest("m", claudeBody, false, null) as Record<string, unknown>;
+    assert.equal(outOff.stream, false, "stream=false stays false (kill-switch parity)");
+  });
+
+  test("source guard: claude stamp keyed on requestFormat", () => {
+    assert.match(source, /requestFormat === "claude"[\s\S]{0,400}withDefaults = \{ \.\.\.\(withDefaults as Record<string, unknown>\), stream \};/);
+  });
+});

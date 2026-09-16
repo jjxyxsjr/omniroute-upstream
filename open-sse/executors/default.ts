@@ -790,6 +790,23 @@ export class DefaultExecutor extends BaseExecutor {
         ? detectFormat(withDefaults as Record<string, unknown>)
         : "openai";
 
+    // #80 (nnd.27): claude-format outbound bodies carry the CLIENT's stream flag
+    // from translation, but the executor-level stream decision (which may force
+    // upstream streaming for non-stream clients — the drain-and-convert path)
+    // already drives headers/Accept and the SSE readiness reader. Align the body
+    // with that decision or anthropic-compat upstreams answer JSON (body wins)
+    // while the gateway consumes SSE — STREAM_EARLY_EOF (2026-09-16 trial catch).
+    // Idempotent when no forcing is active: executor stream then equals the
+    // client stream the translator already emitted.
+    if (
+      requestFormat === "claude" &&
+      typeof withDefaults === "object" &&
+      withDefaults !== null &&
+      !Array.isArray(withDefaults)
+    ) {
+      withDefaults = { ...(withDefaults as Record<string, unknown>), stream };
+    }
+
     if (typeof withDefaults === "object" && withDefaults !== null && !Array.isArray(withDefaults)) {
       if (this.provider?.startsWith?.("anthropic-compatible-")) {
         if (Object.prototype.hasOwnProperty.call(withDefaults, "stream_options")) {
