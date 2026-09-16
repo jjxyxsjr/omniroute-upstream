@@ -1,4 +1,5 @@
 import { translateResponse, initState } from "../translator/index.ts";
+import { stripInternalReasoningPlaceholder } from "./reasoningPlaceholder.ts";
 import { FORMATS } from "../translator/formats.ts";
 import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb";
 import {
@@ -2552,7 +2553,9 @@ export function createSSEStream(options: StreamOptions = {}) {
                   role: "assistant",
                   content: content || null,
                 };
-                const reasoning = passthroughAccumulatedReasoning.trim();
+                const reasoning = stripInternalReasoningPlaceholder(
+                  passthroughAccumulatedReasoning.trim()
+                );
                 if (reasoning) {
                   message.reasoning_content = reasoning;
                 }
@@ -2868,7 +2871,9 @@ export function createSSEStream(options: StreamOptions = {}) {
               } else if (containsMalformedTextualToolCall(content, allowedToolNames)) {
                 content = "";
               }
-              const reasoning = (state?.accumulatedReasoning ?? "").trim();
+              const reasoning = stripInternalReasoningPlaceholder(
+                (state?.accumulatedReasoning ?? "").trim()
+              );
               const message: Record<string, unknown> = {
                 role: "assistant",
                 content: content || null,

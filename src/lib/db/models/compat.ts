@@ -117,6 +117,8 @@ export type ModelCompatOverride = {
   apiFormat?: string;
   targetFormat?: string;
   supportsVision?: boolean;
+  /** #76 (nnd.26): thinking-replay contract for this node's upstream — "redacted" | "text" | "none". */
+  thinkingReplay?: string | null;
 };
 
 export function readCompatList(providerId: string): ModelCompatOverride[] {
@@ -174,6 +176,7 @@ export type ModelCompatPatch = {
   apiFormat?: string | null;
   targetFormat?: string | null;
   supportsVision?: boolean | null;
+  thinkingReplay?: string | null;
 };
 
 export function compatByProtocolHasEntries(map: CompatByProtocolMap | undefined): boolean {
@@ -193,6 +196,13 @@ export function mergeModelCompatOverride(
   const idx = list.findIndex((e) => e.id === modelId);
   const prev = idx >= 0 ? { ...list[idx] } : { id: modelId };
   const next: ModelCompatOverride = { ...prev, id: modelId };
+  if ("thinkingReplay" in patch) {
+    if (patch.thinkingReplay === null) {
+      delete next.thinkingReplay; // unset: revert to default prefix-assumed behavior
+    } else if (typeof patch.thinkingReplay === "string" && ["redacted", "text", "none"].includes(patch.thinkingReplay)) {
+      next.thinkingReplay = patch.thinkingReplay;
+    }
+  }
   if ("normalizeToolCallId" in patch) {
     if (patch.normalizeToolCallId) next.normalizeToolCallId = true;
     else delete next.normalizeToolCallId;
@@ -261,6 +271,7 @@ export function mergeModelCompatOverride(
   const hasApiFormat = Object.prototype.hasOwnProperty.call(next, "apiFormat");
   const hasTargetFormat = Object.prototype.hasOwnProperty.call(next, "targetFormat");
   const hasVisionFlag = Object.prototype.hasOwnProperty.call(next, "supportsVision");
+  const hasThinkingReplayFlag = Object.prototype.hasOwnProperty.call(next, "thinkingReplay");
   if (
     next.normalizeToolCallId ||
     hasPreserveFlag ||
@@ -269,6 +280,7 @@ export function mergeModelCompatOverride(
     hasApiFormat ||
     hasTargetFormat ||
     hasVisionFlag ||
+    hasThinkingReplayFlag ||
     compatByProtocolHasEntries(next.compatByProtocol) ||
     hasTopUpstream
   ) {

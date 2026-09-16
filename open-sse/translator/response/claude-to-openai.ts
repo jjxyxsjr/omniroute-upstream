@@ -1,4 +1,5 @@
 import { register } from "../registry.ts";
+import { stripInternalReasoningPlaceholder } from "../../utils/reasoningPlaceholder.ts";
 import { FORMATS } from "../formats.ts";
 
 type OpenAIUsage = {
@@ -130,7 +131,12 @@ export function claudeToOpenAIResponse(chunk, state) {
       } else if (delta?.type === "thinking_delta" && delta.thinking) {
         // Map Claude thinking_delta → OpenAI reasoning_content
         // Clients (Claude Code, Cursor, etc.) display reasoning_content as the thinking panel
-        results.push(createChunk(state, { reasoning_content: delta.thinking }));
+        // #78 (nnd.26): strip the internal replay sentinel if the model echoes it back —
+        // it is request scaffolding, never user-visible reasoning (#8081 family).
+        const visibleThinking = stripInternalReasoningPlaceholder(delta.thinking);
+        if (visibleThinking) {
+          results.push(createChunk(state, { reasoning_content: visibleThinking }));
+        }
       } else if (delta?.type === "input_json_delta" && delta.partial_json) {
         const toolCall = state.toolCalls.get(chunk.index);
         if (toolCall) {

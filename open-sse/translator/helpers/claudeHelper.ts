@@ -4,6 +4,7 @@ import { lookupReasoning, recordReplay } from "../../services/reasoningCache.ts"
 import { getModelTargetFormat } from "../../config/providerModels.ts";
 import { NON_ANTHROPIC_THINKING_PLACEHOLDER } from "../../utils/reasoningPlaceholder.ts";
 import { sanitizeToolId } from "./schemaCoercion.ts";
+import { getThinkingReplayOverride } from "./thinkingReplayMode.ts";
 
 export { NON_ANTHROPIC_THINKING_PLACEHOLDER } from "../../utils/reasoningPlaceholder.ts";
 
@@ -410,6 +411,15 @@ export function prepareClaudeRequest(
     !noRedactedProviders.has(String(provider || "")) &&
     (supportsPromptCaching || modelTargetsClaude);
 
+  // #76 (nnd.26): per-node thinking-replay declaration overrides the provider-prefix
+  // assumption. "none" → synthesize nothing & leave replayed blocks untouched;
+  // "text" → force the plain-text branch (upstream needs non-empty thinking text).
+  const thinkingReplayOverride = getThinkingReplayOverride(provider, model);
+  const redactedAllowed =
+    supportsRedactedThinking &&
+    thinkingReplayOverride !== "text" &&
+    thinkingReplayOverride !== "none";
+
   const systemBlocks = body.system;
   if (systemBlocks && Array.isArray(systemBlocks) && !preserveCacheControl) {
     body.system = systemBlocks.map((block, i) => {
@@ -614,8 +624,8 @@ export function prepareClaudeRequest(
         );
         if (
           latestHasExistingThinking &&
-          supportsRedactedThinking &&
-          latestHasGenuineThinkingSignature
+          (redactedAllowed || thinkingReplayOverride === "none") &&
+          (thinkingReplayOverride === "none" || latestHasGenuineThinkingSignature)
         ) {
           // Anthropic: skip all thinking-block rewrites entirely — the
           // blocks must remain verbatim (type, thinking, signature, data).
@@ -631,7 +641,7 @@ export function prepareClaudeRequest(
         // Anthropic-shape (the same value is reused across formats — see
         // claude-to-openai.ts:63 where openai tool_call.id = claude tool_use.id).
         const toolUseIds: string[] = [];
-        if (!supportsRedactedThinking) {
+        if (!redactedAllowed && thinkingReplayOverride !== "none") {
           for (const block of content) {
             if (block.type === "tool_use" && typeof block.id === "string") {
               toolUseIds.push(block.id);
@@ -670,7 +680,9 @@ export function prepareClaudeRequest(
               }
               delete block.data;
               delete block.signature;
-            } else if (supportsRedactedThinking) {
+            } else if (thinkingReplayOverride === "none") {
+              // #76: declared no-precursor — leave the replayed block exactly as the client sent it
+            } else if (redactedAllowed) {
               block.type = "redacted_thinking";
               block.data = DEFAULT_THINKING_CLAUDE_SIGNATURE;
               delete block.thinking;
@@ -697,7 +709,12 @@ export function prepareClaudeRequest(
                   }
                 }
                 block.type = "thinking";
-                block.thinking = text || NON_ANTHROPIC_THINKING_PLACEHOLDER;
+                if (!text) {
+                console.info(
+                  `[INJECT] kind=thinking_precursor mode=placeholder provider=${provider} model=${model}`
+                );
+              }
+              block.thinking = text || NON_ANTHROPIC_THINKING_PLACEHOLDER;
               } else {
                 // latestHasExistingThinking + non-empty text: preserve text, still clean up fields
                 block.type = "thinking";
@@ -717,7 +734,12 @@ export function prepareClaudeRequest(
         // assistant turn's content[] needs a thinking block in front of any
         // tool_use. Use the same provider-aware shape selection as above.
         if (thinkingEnabled && !hasThinking && hasToolUse) {
-          if (supportsRedactedThinking) {
+          if (thinkingReplayOverride === "none") {
+            // #76: declared no-precursor — synthesize nothing (LKEAP-verified bare tool_use passes)
+          } else if (redactedAllowed) {
+            console.info(
+              `[INJECT] kind=thinking_precursor mode=redacted provider=${provider} model=${model}`
+            );
             content.unshift({
               type: "redacted_thinking",
               data: DEFAULT_THINKING_CLAUDE_SIGNATURE,

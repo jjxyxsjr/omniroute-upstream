@@ -384,6 +384,8 @@ import {
   cacheReasoningFromAssistantMessage,
   requiresReasoningReplay,
 } from "../services/reasoningCache.ts";
+import { hasThinkingConfig } from "../services/provider.ts";
+import { supportsReasoning } from "../services/reasoningCache.ts";
 import { sanitizeOpenAITool } from "../services/toolSchemaSanitizer.ts";
 import { isCompactResponsesEndpoint } from "../executors/codex.ts";
 import { persistCodexChildQuotaResponse } from "../services/codexAccount/index.ts";
@@ -5052,7 +5054,20 @@ export async function handleChatCore({
       const msg = firstChoice?.message;
       const historyMessages = (translatedBody as { messages?: unknown[] } | null | undefined)
         ?.messages;
-      if (requiresReasoningReplay({ provider, model })) {
+      // #77 (nnd.26): symmetric gating — the injection side (translator/index.ts
+      // translateRequest) passes thinkingEnabled + interleavedField; the write side used to
+      // pass neither, so glm-cn (interleaved reasoning_content per models.dev) never entered
+      // the cache while replays still synthesized placeholders. Mirror the read-side contract.
+      if (
+        requiresReasoningReplay({
+          provider,
+          model,
+          thinkingEnabled: hasThinkingConfig((finalBody || translatedBody) as Record<string, unknown>),
+          supportsReasoning: supportsReasoning({ provider, model }),
+          interleavedField:
+            getResolvedModelCapabilities({ provider, model })?.interleavedField ?? null,
+        })
+      ) {
         cacheReasoningFromAssistantMessage(msg, provider, model, {
           scope: reasoningCacheScope,
           historyMessages: Array.isArray(historyMessages) ? historyMessages : [],
@@ -5613,7 +5628,20 @@ export async function handleChatCore({
         const msg = choices?.[0]?.message;
         const historyMessages = (translatedBody as { messages?: unknown[] } | null | undefined)
           ?.messages;
-        if (requiresReasoningReplay({ provider, model })) {
+        // #77 (nnd.26): symmetric gating — the injection side (translator/index.ts
+      // translateRequest) passes thinkingEnabled + interleavedField; the write side used to
+      // pass neither, so glm-cn (interleaved reasoning_content per models.dev) never entered
+      // the cache while replays still synthesized placeholders. Mirror the read-side contract.
+      if (
+        requiresReasoningReplay({
+          provider,
+          model,
+          thinkingEnabled: hasThinkingConfig((finalBody || translatedBody) as Record<string, unknown>),
+          supportsReasoning: supportsReasoning({ provider, model }),
+          interleavedField:
+            getResolvedModelCapabilities({ provider, model })?.interleavedField ?? null,
+        })
+      ) {
           cacheReasoningFromAssistantMessage(msg, provider, model, {
             scope: reasoningCacheScope,
             historyMessages: Array.isArray(historyMessages) ? historyMessages : [],

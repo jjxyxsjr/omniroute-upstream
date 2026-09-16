@@ -13,6 +13,7 @@ import {
 } from "../../../src/shared/constants/modelSpecs.ts";
 import { fitThinkingToMaxTokens } from "./openai-to-claude/thinkingBudget.ts";
 import { enforceToolResultAdjacency } from "./openai-to-claude/toolResultAdjacency.ts";
+import { getThinkingReplayOverride } from "../helpers/thinkingReplayMode.ts";
 import { sanitizeToolResultId } from "./openai-to-claude/sanitizeToolResultId.ts";
 import {
   openAiImagePartToClaudeBlock,
@@ -294,6 +295,9 @@ export function openaiToClaudeRequest(model, body, stream, credentials = null) {
     delete result.temperature;
   }
 
+  // #76 (nnd.26): per-node thinking-replay declaration gates translator-side synthesis too
+  const thinkingReplayOverride = getThinkingReplayOverride(routedProvider, model);
+
   // Whether the OUTBOUND request actually has extended thinking enabled. Anthropic's
   // schema only requires a precursor thinking/redacted_thinking block before a tool_use
   // block when thinking mode is active for THIS request — never unconditionally (#5945).
@@ -338,7 +342,8 @@ export function openaiToClaudeRequest(model, body, stream, credentials = null) {
         toolNameMap,
         disableToolPrefix,
         thinkingEnabledForRequest,
-        isKimiCoding
+        isKimiCoding,
+        thinkingReplayOverride
       );
       const hasToolUse = blocks.some((b) => b.type === "tool_use");
       const hasToolResult = blocks.some((b) => b.type === "tool_result");
@@ -539,7 +544,8 @@ function getContentBlocksFromMessage(
   toolNameMap = new Map(),
   disableToolPrefix = false,
   thinkingEnabledForRequest = false,
-  isKimiCoding = false
+  isKimiCoding = false,
+  thinkingReplayOverride: string | null = null
 ) {
   const blocks = [];
 
@@ -712,8 +718,12 @@ function getContentBlocksFromMessage(
       msg.reasoning_content &&
       thinkingEnabledForRequest &&
       hasToolUseBlock &&
-      !hasThinkingBlock
+      !hasThinkingBlock &&
+      thinkingReplayOverride !== "none" &&
+      thinkingReplayOverride !== "text"
     ) {
+      // #76: nodes declared thinkingReplay:"none"/"text" must not receive a fabricated
+      // redacted_thinking blob — the plain-text branch in prepareClaudeRequest owns "text".
       blocks.unshift({
         type: "redacted_thinking",
         data: DEFAULT_THINKING_CLAUDE_SIGNATURE,

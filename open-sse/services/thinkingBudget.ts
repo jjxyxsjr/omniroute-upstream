@@ -379,6 +379,12 @@ function applyAdaptiveBudget(body: unknown, cfg: Partial<ThinkingBudgetConfig>) 
     Math.ceil(baseBudget * multiplier)
   );
 
+  // #79 (nnd.26): injection accounting — every gateway-injected thinking budget is
+  // auditable from logs (design study 158 / P5) instead of being discovered via incidents.
+  console.info(
+    `[INJECT] kind=thinking_budget mode=adaptive budget=${budget} multiplier=${multiplier.toFixed(1)} model=${getStringField(bodyRecord, "model")}`
+  );
+
   return setCustomBudget(body, budget);
 }
 
