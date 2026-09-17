@@ -89,12 +89,7 @@ export function recordKeyHealthStatus(
     // (#5239). openai-compatible / per-model-quota gateways multiplex many
     // upstreams behind one key: a 402 is a per-model billing signal and must
     // not invalidate the credential used by sibling models (#12875).
-    const provider =
-      typeof creds.provider === "string"
-        ? creds.provider
-        : typeof connId === "string"
-          ? connId
-          : null;
+    const provider = typeof creds.provider === "string" ? creds.provider : null;
     if (hasPerModelQuota(provider)) {
       return;
     }

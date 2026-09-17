@@ -196,20 +196,31 @@ test("nnd.16: transport inference must NOT split from chatCore format (two-layer
   const executor = new GlmExecutor("glm-cn");
   const openaiBody = {
     model: "glm-4.6v", max_tokens: 512, stream: true,
-    messages: [{ role: "user", content: "x" }], // openai形状
+    messages: [{ role: "user", content: "x" }],
+    // openai形状标志：function 包装的 tools（2026-09-05 422 事故的原始形态）
+    tools: [{
+      type: "function",
+      function: { name: "get_weather", description: "d", parameters: { type: "object", properties: {} } },
+    }],
   };
   const out = executor.transformForTransport(
     "glm-4.6v", structuredClone(openaiBody), true,
     { apiKey: "k", providerSpecificData: { targetFormat: "claude" } }, // psd有但customModels无
     "anthropic"
   ) as Record<string, unknown>;
-  // openai体必须被翻译(现状已对——nnd.14的looksClaudeShaped兜住了)
-  const _tools = (out.tools as Array<Record<string, unknown>>);
+  // openai体必须被翻译(looksClaudeShaped 对 function 包装 tools 判否→走 openai→claude 翻译)：
+  // 翻译后 tools 是 claude 形状(顶层 name + input_schema)；裸透传则保留 .function 包装，
+  // openai tools 直发 anthropic 门 → 上游 422(2026-09-05 事故)。
+  const outTools = out.tools as Array<Record<string, unknown>>;
+  assert.ok(
+    Array.isArray(outTools) && outTools.length > 0 && !("function" in outTools[0]) &&
+      typeof outTools[0].name === "string",
+    "openai体(function包装tools)走claude传输必须翻成claude工具形状，实际: " + JSON.stringify(outTools)
+  );
   // transport 推断历史：nnd.16 v1 曾计划"无 customModels 对齐信号不推断 anthropic"，
   // v2 最终形态相反——psd 单方面 targetFormat 驱动 anthropic（getGlmPrimaryTransport
   // 推断+半开告警，见 glmProvider.ts v2 注释与下方 v2 断言 getGlmPrimaryTransport
-  // (PASSTHROUGH_PSD)==='anthropic'）。本空测试仅为历史叙事占位，可随下次触碰删除。
-  assert.ok(true, "transport 推断的现行断言在 v2 测试块");
+  // (PASSTHROUGH_PSD)==='anthropic'）。
 });
 
 test("nnd.16: glm-cn 1210 image-format 400 carries non-retryable semantics", async () => {

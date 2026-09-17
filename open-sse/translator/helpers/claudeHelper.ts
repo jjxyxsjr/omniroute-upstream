@@ -710,11 +710,11 @@ export function prepareClaudeRequest(
                 }
                 block.type = "thinking";
                 if (!text) {
-                console.info(
-                  `[INJECT] kind=thinking_precursor mode=placeholder provider=${provider} model=${model}`
-                );
-              }
-              block.thinking = text || NON_ANTHROPIC_THINKING_PLACEHOLDER;
+                  console.info(
+                    `[INJECT] kind=thinking_precursor mode=placeholder provider=${provider} model=${model}`
+                  );
+                }
+                block.thinking = text || NON_ANTHROPIC_THINKING_PLACEHOLDER;
               } else {
                 // latestHasExistingThinking + non-empty text: preserve text, still clean up fields
                 block.type = "thinking";

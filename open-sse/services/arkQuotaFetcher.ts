@@ -384,12 +384,11 @@ export async function fetchArkPlanQuota(
  * ids) for other custom Ark nodes.
  */
 export function registerArkPlanQuotaFetcher(providerIds?: string[]): void {
+  const envIds = process.env.OMNIROUTE_ARK_QUOTA_PROVIDERS?.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
   const ids =
-    providerIds ??
-    (process.env.OMNIROUTE_ARK_QUOTA_PROVIDERS?.split(",").map((s) => s.trim()).filter(Boolean)
-      ?.length
-      ? process.env.OMNIROUTE_ARK_QUOTA_PROVIDERS.split(",").map((s) => s.trim()).filter(Boolean)
-      : DEFAULT_ARK_QUOTA_PROVIDERS);
+    providerIds ?? (envIds && envIds.length > 0 ? envIds : DEFAULT_ARK_QUOTA_PROVIDERS);
   for (const provider of ids) {
     registerMonitorFetcher(provider, fetchArkPlanQuota);
     registerQuotaFetcher(provider, fetchArkPlanQuota);

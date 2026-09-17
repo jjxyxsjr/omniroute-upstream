@@ -845,7 +845,7 @@ export function pipeWithDisconnect(
   providerResponse: Response,
   transformStream: TransformStream<Uint8Array, Uint8Array>,
   streamController: StreamController,
-  opts: { stallTimeoutMs?: number; contentStallTimeoutMs?: number; highWaterMark?: number } = {}
+  opts: { stallTimeoutMs?: number; contentStallTimeoutMs?: number } = {}
 ) {
   const stallTimeoutMs = opts.stallTimeoutMs ?? DEFAULT_STREAM_STALL_TIMEOUT_MS;
   // Disabled unless a caller opts in with an explicit budget (chatCore wires

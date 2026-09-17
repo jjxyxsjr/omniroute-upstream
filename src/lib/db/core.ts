@@ -874,7 +874,14 @@ export function pruneManagedDbBackups(reason: string, keep = 3, dirOverride?: st
       fs.unlinkSync(path.join(backupDir, entry.name));
     }
     return stale.length;
-  } catch {
+  } catch (err) {
+    // Silent-fail here is how the 2026-09-06 disk-fill incident looked from
+    // the inside: pruning is the control that keeps backups bounded, so a
+    // failed prune must at least be visible in logs.
+    console.warn(
+      "[DB] Failed to prune managed db backups:",
+      err instanceof Error ? err.message : String(err)
+    );
     return 0;
   }
 }
