@@ -122,6 +122,12 @@ export function clampComboDepth(value: unknown): number {
  * MAX_GLOBAL_ATTEMPTS so a bad config can never disable the budget (runaway
  * retries against a dead pool) nor blow past the safety ceiling.
  */
+export function clampGlobalAttempts(value: unknown): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 1) return MAX_GLOBAL_ATTEMPTS;
+  return Math.min(n, MAX_GLOBAL_ATTEMPTS_HARD_CAP);
+}
+
 /**
  * nnd.20: separate, much tighter budget for READINESS-DEADLINE failures across
  * a combo run. The global-attempts cap (30) is calibrated for fast failures
@@ -135,12 +141,6 @@ export const COMBO_MAX_DEADLINE_FAILURES = 3;
 export function clampDeadlineFailureBudget(value: unknown): number {
   const n = Math.floor(Number(value));
   if (!Number.isFinite(n) || n < 1) return COMBO_MAX_DEADLINE_FAILURES;
-  return Math.min(n, MAX_GLOBAL_ATTEMPTS_HARD_CAP);
-}
-
-export function clampGlobalAttempts(value: unknown): number {
-  const n = Math.floor(Number(value));
-  if (!Number.isFinite(n) || n < 1) return MAX_GLOBAL_ATTEMPTS;
   return Math.min(n, MAX_GLOBAL_ATTEMPTS_HARD_CAP);
 }
 

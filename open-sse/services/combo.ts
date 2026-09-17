@@ -273,7 +273,11 @@ import {
   calculateResetWindowAffinity,
   type ResetWindowConfig,
 } from "./combo/quotaScoring.ts";
-import { fetchResetAwareQuotaWithCache, preScreenTargets } from "./combo/quotaStrategies.ts";
+import {
+  fetchResetAwareQuotaWithCache,
+  positiveConnectionCap,
+  preScreenTargets,
+} from "./combo/quotaStrategies.ts";
 import {
   buildAutoQuotaThresholds,
   resolveQuotaExhaustionCutoffForTarget,
@@ -638,12 +642,10 @@ export async function buildAutoCandidates(
   // must never empty the candidate set; queueing remains the floor.
   const saturationKept = visibilityKept.filter((c) => {
     if (!c.connectionId) return true;
-    const conn = connectionById.get(c.connectionId) as
-      | { maxConcurrent?: number | null; max_concurrent?: number | null }
-      | undefined;
-    const raw = conn?.maxConcurrent ?? conn?.max_concurrent;
-    const cap = typeof raw === "number" ? raw : Number(raw);
-    if (!Number.isFinite(cap) || cap <= 0) return true;
+    const cap = positiveConnectionCap(
+      connectionById.get(c.connectionId) as Record<string, unknown> | undefined
+    );
+    if (cap === null) return true;
     return !isAccountSemaphoreFull(c.provider, c.connectionId, cap);
   });
   return saturationKept.length > 0 ? saturationKept : visibilityKept;
@@ -2431,6 +2433,11 @@ async function handleComboChatInner({
             typeof errorBody?.error === "object" && errorBody.error !== null
               ? (errorBody.error as { code?: string })
               : null;
+          // Deadline detection: error-body code first; the message sniff below is
+          // a belt for paths that drop the code in serialization — both producers
+          // (streamReadiness timeout returns) already stamp
+          // code:"STREAM_READINESS_TIMEOUT", so retire the sniff only after
+          // verifying no code-less path survives (candidate, nnd.28 审核挂账).
           const deadlineFailure =
             errorRecord?.code === "STREAM_READINESS_TIMEOUT" ||
             errorText.includes("no non-ping SSE event");

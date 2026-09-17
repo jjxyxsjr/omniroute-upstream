@@ -301,7 +301,11 @@ async function dropSaturatedTargets(
   return kept.length > 0 ? kept : targets;
 }
 
-function positiveConnectionCap(
+/** Positive per-connection concurrency cap from either spelling of the field
+ * (maxConcurrent / max_concurrent), or null when unset/invalid — shared by
+ * quota-aware target scoring and the auto-combo saturation pre-filter so the
+ * two never drift on normalization. */
+export function positiveConnectionCap(
   connection: Record<string, unknown> | undefined
 ): number | null {
   const raw = connection?.maxConcurrent ?? connection?.max_concurrent;
