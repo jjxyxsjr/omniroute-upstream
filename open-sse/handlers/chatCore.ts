@@ -259,6 +259,7 @@ import { stripUnsupportedParams } from "./chatCore/unsupportedParamsStrip.ts";
 import { checkToolCallingRequiredButUnsupported } from "./chatCore/toolCallingRequiredCheck.ts";
 import {
   supportsMaxTokens,
+  supportsReasoning,
   getResolvedModelCapabilities,
   getExplicitModelOutputCap,
   resolveInputTokenCapForGate,
@@ -439,7 +440,6 @@ import {
   requiresReasoningReplay,
 } from "../services/reasoningCache.ts";
 import { hasThinkingConfig } from "../services/provider.ts";
-import { supportsReasoning } from "../services/reasoningCache.ts";
 import { sanitizeOpenAITool } from "../services/toolSchemaSanitizer.ts";
 import { isCompactResponsesEndpoint } from "../executors/codex.ts";
 import { persistCodexChildQuotaResponse } from "../services/codexAccount/index.ts";
