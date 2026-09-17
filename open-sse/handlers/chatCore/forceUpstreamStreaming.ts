@@ -10,8 +10,10 @@
  * non-streaming branch drains the SSE back into JSON (cline forceStream
  * mechanism, upstream #2081/#6126).
  *
- * Kill switch: OMNIROUTE_FORCE_UPSTREAM_STREAM=0 restores the legacy
- * request-shape passthrough (unset = on).
+ * Kill switch: OMNIROUTE_FORCE_UPSTREAM_STREAM=0/false/off restores the legacy
+ * request-shape passthrough (unset = on). Unrecognized values warn and fall
+ * back to the default (on) — nnd.18 convention: a typo'd env must never
+ * silently flip behavior.
  */
 export function resolveForceUpstreamStreaming(
   env: Record<string, string | undefined> = process.env
@@ -19,5 +21,10 @@ export function resolveForceUpstreamStreaming(
   const raw = env.OMNIROUTE_FORCE_UPSTREAM_STREAM;
   if (raw == null || raw.trim() === "") return true;
   const value = raw.trim().toLowerCase();
-  return value === "1" || value === "true";
+  if (value === "0" || value === "false" || value === "off") return false;
+  if (value === "1" || value === "true") return true;
+  console.warn(
+    `[forceUpstreamStreaming] OMNIROUTE_FORCE_UPSTREAM_STREAM="${raw.trim()}" not recognized (use 1/true or 0/false/off) — defaulting to ON`
+  );
+  return true;
 }

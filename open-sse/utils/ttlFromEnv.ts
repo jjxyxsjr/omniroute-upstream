@@ -10,9 +10,11 @@
  *   unset / blank / NaN / ≤0 → defaultMinutes
  *   positive integer        → that many minutes
  *
- * Return value is MILLISECONDS (*60*1000); consumers name it *_MS.
+ * Return value is MILLISECONDS (*60*1000) — the Ms suffix in the name is the
+ * unit of the RETURN; the env value's unit is minutes; consumers name their
+ * consts *_MS.
  */
-export function resolveTtlMinutesFromEnv(
+export function resolveTtlMsFromEnv(
   envVarName: string,
   defaultMinutes: number
 ): number {

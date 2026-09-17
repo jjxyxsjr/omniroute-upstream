@@ -104,9 +104,15 @@ export function clampTopLevelMaxTokens(body: unknown, cap: number): boolean {
   const current = Number(rec.max_tokens);
   if (!Number.isFinite(current) || current <= cap) return false;
   rec.max_tokens = cap;
+  // When the learned cap forces the thinking budget down, keep this much room
+  // under the cap for the visible answer instead of letting reasoning eat it all.
+  const thinkingHeadroomTokens = 1024;
   const budget = Number(rec.thinking?.budget_tokens);
-  if (Number.isFinite(budget) && budget > cap - 1024) {
-    rec.thinking = { ...rec.thinking, budget_tokens: Math.max(cap - 1024, 0) };
+  if (Number.isFinite(budget) && budget > cap - thinkingHeadroomTokens) {
+    rec.thinking = {
+      ...rec.thinking,
+      budget_tokens: Math.max(cap - thinkingHeadroomTokens, 0),
+    };
   }
   return true;
 }

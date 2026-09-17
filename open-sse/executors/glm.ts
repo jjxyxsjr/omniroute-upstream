@@ -150,7 +150,9 @@ function hasTools(body: unknown): boolean {
  * `{type:"function",function:{...}}`, string/parallel system — must take the
  * openai→claude translation instead (2026-09-05 422 incident).
  */
-function looksClaudeShaped(record: Record<string, unknown> | null | undefined): boolean {
+function looksClaudeShaped(
+  record: Record<string, unknown> | null | undefined
+): record is Record<string, unknown> {
   if (!record) return false;
   const tools = record.tools;
   if (Array.isArray(tools) && tools.length > 0) {
@@ -396,17 +398,15 @@ export class GlmExecutor extends DefaultExecutor {
     // and upstream 422s (2026-09-05 incident: tools[0].name missing). Shape-detect instead
     // of trusting the flag alone.
     if (isGlmClaudePassthrough(credentials.providerSpecificData) && looksClaudeShaped(record)) {
-      if (record) {
-        const existingThinking = asRecord(record.thinking);
-        if (
-          existingThinking &&
-          existingThinking.type !== "enabled" &&
-          existingThinking.type !== "disabled"
-        ) {
-          record.thinking = { ...existingThinking, type: "enabled" };
-        }
-        if (effortTier) record.effort = effortTier.effort;
+      const existingThinking = asRecord(record.thinking);
+      if (
+        existingThinking &&
+        existingThinking.type !== "enabled" &&
+        existingThinking.type !== "disabled"
+      ) {
+        record.thinking = { ...existingThinking, type: "enabled" };
       }
+      if (effortTier) record.effort = effortTier.effort;
       return transformed;
     }
 

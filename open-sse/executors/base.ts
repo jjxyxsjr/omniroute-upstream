@@ -1580,7 +1580,8 @@ export class BaseExecutor {
               `Upstream 400 rejected max_tokens on ${url} — clamped to ${ceiling} and retrying (learned for ${this.provider}/${model})`
             );
             response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
-          } else if (ceiling !== null && !clampTopLevelMaxTokens(transformedBody, ceiling)) {
+          } else if (ceiling !== null) {
+            // Reached only when the clamp above returned false (body already ≤ ceiling) — no second mutating call needed.
             // nnd.24 ④ forensics: the upstream DID advertise a max_tokens ceiling
             // and the body is already at/below it, yet still rejected — surface
             // the pair so a repeated rejection (e.g. a second oversized field)

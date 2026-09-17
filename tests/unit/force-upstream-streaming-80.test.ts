@@ -20,7 +20,7 @@ describe("#80 resolveForceUpstreamStreaming env truth table", () => {
     [{ OMNIROUTE_FORCE_UPSTREAM_STREAM: "0" }, false, "0 → off (kill switch)"],
     [{ OMNIROUTE_FORCE_UPSTREAM_STREAM: "false" }, false, "false → off"],
     [{ OMNIROUTE_FORCE_UPSTREAM_STREAM: "off" }, false, "off → off"],
-    [{ OMNIROUTE_FORCE_UPSTREAM_STREAM: "yes" }, false, "non-canonical → off (strict)"],
+    [{ OMNIROUTE_FORCE_UPSTREAM_STREAM: "yes" }, true, "non-canonical → 回落默认 ON（nnd.18 非法值回落+告警）"],
   ];
   for (const [env, expected, name] of cases) {
     test(name, () => {

@@ -6,6 +6,10 @@ type DirectFetch = (
 
 const DEFAULT_DIRECT_HEADERS_TIMEOUT_MS = 30_000;
 const DIRECT_RESPONSE_START_TIMEOUT_CODE = "DIRECT_RESPONSE_START_TIMEOUT";
+// Transition slack between the pooled probe and the fresh-socket attempt
+// (first-attempt teardown + re-issue) so the executor budget never expires
+// exactly at the seam between the two windows.
+const NON_STREAM_BUDGET_SLACK_MS = 5_000;
 
 export function resolveDirectHeadersTimeoutMs(
   env: Record<string, string | undefined> = process.env
@@ -63,7 +67,7 @@ export function resolveNonStreamTotalBudgetMs(
 ): number {
   if (!(pooledMs > 0)) return pooledMs;
   const freshMs = resolveFreshSocketResponseStartTimeoutMs(pooledMs, streamReadinessMaxTimeoutMs);
-  return pooledMs + freshMs + 5_000;
+  return pooledMs + freshMs + NON_STREAM_BUDGET_SLACK_MS;
 }
 
 function createDirectResponseStartTimeout(timeoutMs: number): Error & { code: string } {

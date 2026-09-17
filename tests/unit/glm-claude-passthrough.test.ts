@@ -266,22 +266,22 @@ test("nnd.16: createErrorResult stamps Retry-After header when retryAfterMs set"
 });
 
 test("nnd.18 audit: TTL shared helper — valid env, invalid env, unset env", async () => {
-  const { resolveTtlMinutesFromEnv } = await import("../../open-sse/utils/ttlFromEnv.ts");
+  const { resolveTtlMsFromEnv } = await import("../../open-sse/utils/ttlFromEnv.ts");
   // 有效值
   process.env.TEST_TTL_MIN = "30";
-  assert.equal(resolveTtlMinutesFromEnv("TEST_TTL_MIN", 60), 30 * 60 * 1000);
+  assert.equal(resolveTtlMsFromEnv("TEST_TTL_MIN", 60), 30 * 60 * 1000);
   // 非法值回退默认
   process.env.TEST_TTL_MIN = "abc";
-  assert.equal(resolveTtlMinutesFromEnv("TEST_TTL_MIN", 60), 60 * 60 * 1000);
+  assert.equal(resolveTtlMsFromEnv("TEST_TTL_MIN", 60), 60 * 60 * 1000);
   // 负数回退默认
   process.env.TEST_TTL_MIN = "-5";
-  assert.equal(resolveTtlMinutesFromEnv("TEST_TTL_MIN", 60), 60 * 60 * 1000);
+  assert.equal(resolveTtlMsFromEnv("TEST_TTL_MIN", 60), 60 * 60 * 1000);
   // 未设置回退默认
   delete process.env.TEST_TTL_MIN;
-  assert.equal(resolveTtlMinutesFromEnv("TEST_TTL_MIN", 60), 60 * 60 * 1000);
+  assert.equal(resolveTtlMsFromEnv("TEST_TTL_MIN", 60), 60 * 60 * 1000);
   // 空串回退默认
   process.env.TEST_TTL_MIN = "";
-  assert.equal(resolveTtlMinutesFromEnv("TEST_TTL_MIN", 60), 60 * 60 * 1000);
+  assert.equal(resolveTtlMsFromEnv("TEST_TTL_MIN", 60), 60 * 60 * 1000);
   delete process.env.TEST_TTL_MIN;
 });
 
