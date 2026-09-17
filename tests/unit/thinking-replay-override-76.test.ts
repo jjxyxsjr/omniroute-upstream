@@ -110,6 +110,9 @@ describe("#76 thinkingReplay capability declaration (modelCompatOverrides)", () 
   });
 });
 
+// ⚠️ source-guard 式测试（grep 实现文本）：豁免理由——断言的是翻译器内部的
+// 门控接线与哨兵剥离点，跨 claudeHelper/stream/respTranslator 三文件无统一导出缝；
+// 重构搬动这些块时需同步跟进。
 describe("#77-#79 source guards (symmetric gating / sentinel strip / injection logs)", () => {
   const chatCore = readFileSync("open-sse/handlers/chatCore.ts", "utf8");
   const stream = readFileSync("open-sse/utils/stream.ts", "utf8");

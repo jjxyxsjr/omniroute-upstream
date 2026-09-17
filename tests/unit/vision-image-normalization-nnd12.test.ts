@@ -56,8 +56,9 @@ test("2c env switch: default on; 0/false disables; 1/true enables", () => {
   assert.equal(resolveVisionImageNormalization({ OMNIROUTE_IMAGE_NORMALIZATION: "" }), true);
 });
 
-test("2c oversized PNG is resized into the long-edge and pixel budget", async () => {
-  if (!sharp) return; // sharp missing on this host — covered in CI/container
+const sharpMissing = !sharp && "sharp native module unavailable on this host — vision normalization cases run in CI/container";
+
+test("2c oversized PNG is resized into the long-edge and pixel budget", { skip: sharpMissing }, async () => {
   // 6000×800 PNG: long edge 6000 > 4096 AND 4.8M pixels > 4.19M.
   const input = await sharp({
     create: { width: 6000, height: 800, channels: 3, background: "#334455" },
@@ -76,8 +77,7 @@ test("2c oversized PNG is resized into the long-edge and pixel budget", async ()
   );
 });
 
-test("2c alpha-carrying image is flattened to white and re-encoded as baseline JPEG", async () => {
-  if (!sharp) return;
+test("2c alpha-carrying image is flattened to white and re-encoded as baseline JPEG", { skip: sharpMissing }, async () => {
   const input = await sharp({
     create: { width: 256, height: 256, channels: 4, background: "#00000080" },
   })
@@ -92,8 +92,7 @@ test("2c alpha-carrying image is flattened to white and re-encoded as baseline J
   assert.equal(meta.isProgressive ?? false, false, "baseline (non-progressive) JPEG");
 });
 
-test("2c an already-compliant RGB JPEG passes through byte-identical", async () => {
-  if (!sharp) return;
+test("2c an already-compliant RGB JPEG passes through byte-identical", { skip: sharpMissing }, async () => {
   const input = await sharp({
     create: { width: 640, height: 480, channels: 3, background: "#aabbcc" },
   })
@@ -104,8 +103,7 @@ test("2c an already-compliant RGB JPEG passes through byte-identical", async () 
   assert.ok(out.buffer.equals(input), "byte-identical passthrough");
 });
 
-test("2c body walker rewrites OpenAI image_url and Claude source data URIs, leaves URLs and text alone", async () => {
-  if (!sharp) return;
+test("2c body walker rewrites OpenAI image_url and Claude source data URIs, leaves URLs and text alone", { skip: sharpMissing }, async () => {
   const png = await sharp({
     create: { width: 5000, height: 600, channels: 3, background: "#112233" },
   })

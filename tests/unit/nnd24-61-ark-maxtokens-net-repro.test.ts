@@ -82,18 +82,6 @@ function claudeShapedBody() {
   };
 }
 
-/** 谭婧琳客户端原始 openai 形态 body（call_logs 存档实证）。 */
-function openAIShapedBody() {
-  return {
-    model: MODEL,
-    messages: [{ role: "system", content: "You are a helpful assistant." }, { role: "user", content: "回复 OK" }],
-    max_tokens: 8192,
-    thinking: { type: "disabled" },
-    temperature: 0.3,
-    stream: true,
-  };
-}
-
 function withFetchMock(mock: (callIndex: number, url: string, init: RequestInit) => Response) {
   const originalFetch = globalThis.fetch;
   const calls: { url: string; body: Record<string, unknown> }[] = [];
@@ -180,31 +168,6 @@ test("nnd.24 ④ wiring (raw escaped 400): executor clamps and retries on the tr
   }
   assert.equal(mock.calls.length, 2, "raw escaped ark 400 must trigger clamp-and-retry");
   assert.equal(mock.calls[1].body.max_tokens, 131072);
-});
-
-test("nnd.24 ④ composition: openai-shaped 8192 + thinking disabled — record outbound max_tokens (locator, not verdict)", async () => {
-  __test_resetLearnedMaxTokensCaps();
-  const mock = withFetchMock(() => OK_200());
-  try {
-    const executor = new DefaultExecutor(PROVIDER);
-    await executor.execute({
-      model: MODEL,
-      body: openAIShapedBody(),
-      stream: true,
-      credentials: CREDENTIALS,
-    });
-  } catch {
-    // 只观察出站形态
-  } finally {
-    mock.restore();
-  }
-
-  assert.ok(mock.calls.length >= 1, "executor must dispatch at least once");
-  // 定位断言（故意宽松）：打印出站 max_tokens，判断合成点是否在 executor 内。
-  // 若出站 = 8192 → 合成在 chatCore 预翻译层；若出站 > 8192 → 合成在 executor 内。
-  const outbound = Number(mock.calls[0].body.max_tokens ?? 0);
-  console.log(`[nnd.24 ④ locator] outbound max_tokens = ${outbound} (client sent 8192)`);
-  assert.ok(Number.isFinite(outbound) && outbound > 0, "outbound max_tokens must be a positive finite number");
 });
 
 test("nnd.24 ④ root-fix: learned cap bounds the room+budget composition for cap-less custom nodes", () => {

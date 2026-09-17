@@ -4,6 +4,10 @@
  * skip is the gateway actively shedding load (#9654); a bare info line with no
  * combo/model/queue context made 503 storms invisible in log triage (the
  * original nnd.12 backlog item pointed at the combo admission paths).
+ *
+ * ⚠️ source-guard 式测试（grep 实现文本）：豁免理由——断言对象是日志调用的
+ * 接线形态（warn 级别 + 结构化字段），combo 循环内无导出缝可直测；上游重构
+ * 搬动该代码块时需同步跟进本文件。
  */
 import test from "node:test";
 import assert from "node:assert/strict";

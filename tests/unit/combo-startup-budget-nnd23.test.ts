@@ -98,7 +98,6 @@ test("nnd.23 ① combo: rotation cutoff stops new seat rounds once the budget el
   assert.deepEqual(calls, ["glm/slow-fail"]);
   const text = await result.text();
   assert.match(text, /timeout|504|unavailable/i);
-  assert.ok(result.status >= 500 || text.length > 0);
 });
 
 test("nnd.23 ① combo: budget does not touch a fast first seat (no regression)", async () => {

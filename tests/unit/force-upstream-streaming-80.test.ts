@@ -29,6 +29,8 @@ describe("#80 resolveForceUpstreamStreaming env truth table", () => {
   }
 });
 
+// ⚠️ source-guard 式测试（grep 实现文本）：豁免理由——#80 的接线点是 chatCore 内
+// 的布尔 OR 表达式，无导出缝；crash-storm 模式（拆模块后转直测）是它的退役路径。
 describe("#80 chatCore wiring source guards", () => {
   const source = readFileSync(
     new URL("../../open-sse/handlers/chatCore.ts", import.meta.url),
