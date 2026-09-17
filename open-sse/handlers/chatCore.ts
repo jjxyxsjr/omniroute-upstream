@@ -46,6 +46,58 @@ import {
 } from "../services/routing/index.ts";
 
 /**
+ * #77 (nnd.26): symmetric gating shared by the non-streaming and streaming
+ * write sides — the injection side (translator/index.ts translateRequest)
+ * passes thinkingEnabled + interleavedField; the write side used to pass
+ * neither, so glm-cn (interleaved reasoning_content per models.dev) never
+ * entered the cache while replays still synthesized placeholders. Mirror the
+ * read-side contract.
+ */
+function shouldCacheReasoning(
+  provider: string,
+  model: string,
+  requestBody: unknown
+): boolean {
+  return requiresReasoningReplay({
+    provider,
+    model,
+    thinkingEnabled: hasThinkingConfig(requestBody as Record<string, unknown>),
+    supportsReasoning: supportsReasoning({ provider, model }),
+    interleavedField:
+      getResolvedModelCapabilities({ provider, model })?.interleavedField ?? null,
+  });
+}
+
+/**
+ * 2a: scale the execution deadline for large non-streaming generations instead
+ * of killing them at the legacy 120s while the upstream is legitimately still
+ * generating. nnd.24 ①: streaming jobs resolve at SSE handoff — their deadline
+ * must cover the two-segment headers window, not the legacy 120s queue budget.
+ */
+function resolveExecutionExpirationMs(
+  bodyToSend: {
+    stream?: unknown;
+    max_tokens?: unknown;
+    max_output_tokens?: unknown;
+  } | null | undefined,
+  provider: string,
+  attemptConnectionId: string | undefined
+): number {
+  if (bodyToSend?.stream === true) {
+    return computeStreamingExecutionExpirationMs(
+      resolveNonStreamTotalBudgetMs(
+        resolveDirectHeadersTimeoutMs(),
+        STREAM_READINESS_MAX_TIMEOUT_MS
+      )
+    );
+  }
+  return computeNonStreamExecutionExpirationMs(
+    resolveRequestQueueMaxWaitMs(provider, undefined, attemptConnectionId),
+    Number(bodyToSend?.max_tokens ?? bodyToSend?.max_output_tokens ?? 0)
+  );
+}
+
+/**
  * Best-effort finish_reason extraction from a (possibly translated) response
  * body for routing-event telemetry. Returns null when the shape is unknown.
  */
@@ -289,6 +341,7 @@ import { resolveExecutorWithProxy as resolveExecutorWithProxyFor } from "./chatC
 import type { ClaudeMessage } from "./chatCore/claudeMessageTypes.ts";
 import { normalizeClaudeUpstreamMessages as normalizeClaudeUpstreamMessagesFor } from "./chatCore/claudeUpstreamMessages.ts";
 import {
+  nonNegativeMs,
   persistAttemptLogs as persistAttemptLogsFor,
   type PersistAttemptLogsArgs,
 } from "./chatCore/attemptLogging.ts";
@@ -3153,27 +3206,13 @@ export async function handleChatCore({
                   });
                 },
                 streamController.signal,
-                // 2a: scale the execution deadline for large non-streaming
-                // generations instead of killing them at the legacy 120s while
-                // the upstream is legitimately still generating.
-                // nnd.24 ①: streaming jobs resolve at SSE handoff — their
-                // deadline must cover the two-segment headers window, not the
-                // legacy 120s queue budget.
-                bodyToSend?.stream === true
-                  ? {
-                      executionExpirationMs: computeStreamingExecutionExpirationMs(
-                        resolveNonStreamTotalBudgetMs(
-                          resolveDirectHeadersTimeoutMs(),
-                          STREAM_READINESS_MAX_TIMEOUT_MS
-                        )
-                      ),
-                    }
-                  : {
-                      executionExpirationMs: computeNonStreamExecutionExpirationMs(
-                        resolveRequestQueueMaxWaitMs(provider, undefined, attemptConnectionId),
-                        Number(bodyToSend?.max_tokens ?? bodyToSend?.max_output_tokens ?? 0)
-                      ),
-                    }
+                {
+                  executionExpirationMs: resolveExecutionExpirationMs(
+                    bodyToSend,
+                    provider,
+                    attemptConnectionId ?? undefined
+                  ),
+                }
               );
               const res = normalizeExecutorResult(rawExecutorResult);
               trace("post_executor", { status: res?.response?.status });
@@ -5066,20 +5105,8 @@ export async function handleChatCore({
       const msg = firstChoice?.message;
       const historyMessages = (translatedBody as { messages?: unknown[] } | null | undefined)
         ?.messages;
-      // #77 (nnd.26): symmetric gating — the injection side (translator/index.ts
-      // translateRequest) passes thinkingEnabled + interleavedField; the write side used to
-      // pass neither, so glm-cn (interleaved reasoning_content per models.dev) never entered
-      // the cache while replays still synthesized placeholders. Mirror the read-side contract.
-      if (
-        requiresReasoningReplay({
-          provider,
-          model,
-          thinkingEnabled: hasThinkingConfig((finalBody || translatedBody) as Record<string, unknown>),
-          supportsReasoning: supportsReasoning({ provider, model }),
-          interleavedField:
-            getResolvedModelCapabilities({ provider, model })?.interleavedField ?? null,
-        })
-      ) {
+      // #77 gate: see shouldCacheReasoning above for the symmetric-gating contract.
+      if (shouldCacheReasoning(provider, model, finalBody || translatedBody)) {
         cacheReasoningFromAssistantMessage(msg, provider, model, {
           scope: reasoningCacheScope,
           historyMessages: Array.isArray(historyMessages) ? historyMessages : [],
@@ -5640,20 +5667,8 @@ export async function handleChatCore({
         const msg = choices?.[0]?.message;
         const historyMessages = (translatedBody as { messages?: unknown[] } | null | undefined)
           ?.messages;
-        // #77 (nnd.26): symmetric gating — the injection side (translator/index.ts
-      // translateRequest) passes thinkingEnabled + interleavedField; the write side used to
-      // pass neither, so glm-cn (interleaved reasoning_content per models.dev) never entered
-      // the cache while replays still synthesized placeholders. Mirror the read-side contract.
-      if (
-        requiresReasoningReplay({
-          provider,
-          model,
-          thinkingEnabled: hasThinkingConfig((finalBody || translatedBody) as Record<string, unknown>),
-          supportsReasoning: supportsReasoning({ provider, model }),
-          interleavedField:
-            getResolvedModelCapabilities({ provider, model })?.interleavedField ?? null,
-        })
-      ) {
+        // #77 gate: see shouldCacheReasoning above for the symmetric-gating contract.
+        if (shouldCacheReasoning(provider, model, finalBody || translatedBody)) {
           cacheReasoningFromAssistantMessage(msg, provider, model, {
             scope: reasoningCacheScope,
             historyMessages: Array.isArray(historyMessages) ? historyMessages : [],
@@ -5727,14 +5742,8 @@ export async function handleChatCore({
         model: model || "unknown",
         strategy: isCombo ? (comboStrategy ?? "combo") : "direct",
         latencyMs: Date.now() - startTime,
-        ttftMs:
-          typeof effectiveTtft === "number" && Number.isFinite(effectiveTtft) && effectiveTtft >= 0
-            ? effectiveTtft
-            : null,
-        itlMs:
-          typeof streamItlMs === "number" && Number.isFinite(streamItlMs) && streamItlMs >= 0
-            ? streamItlMs
-            : null,
+        ttftMs: nonNegativeMs(effectiveTtft),
+        itlMs: nonNegativeMs(streamItlMs),
         inputTokens:
           streamUsage && typeof streamUsage === "object"
             ? (() => {

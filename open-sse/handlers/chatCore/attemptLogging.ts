@@ -91,6 +91,13 @@ function toConnectionId(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+/** Finite non-negative duration in ms, or null — the shared sanitizer for
+ * ttft/queueWait/itl log fields so garbage (NaN/Infinity/negative/wrong
+ * type) never reaches the persistence layer. */
+export function nonNegativeMs(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 function buildAccountRotationMeta(
   provider: string | null | undefined,
   initialConnectionId: string | null,
@@ -319,11 +326,8 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
     modelPinned: modelPinned || false,
     sessionTag: sessionTag || null,
     responseId: extractResponsesId(sourceFormat, clientResponse),
-    ttftMs: typeof ttftMs === "number" && Number.isFinite(ttftMs) && ttftMs >= 0 ? ttftMs : null,
-    queueWaitMs: (() => {
-      const q = getQueueWaitMs?.();
-      return typeof q === "number" && Number.isFinite(q) && q >= 0 ? q : null;
-    })(),
+    ttftMs: nonNegativeMs(ttftMs),
+    queueWaitMs: nonNegativeMs(getQueueWaitMs?.()),
   }).catch(() => {});
 
   // Emit the terminal request-lifecycle event to the live dashboard bus. `request.started`

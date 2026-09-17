@@ -116,11 +116,20 @@ describe("#77-#79 source guards (symmetric gating / sentinel strip / injection l
   const respTranslator = readFileSync("open-sse/translator/response/claude-to-openai.ts", "utf8");
   const budget = readFileSync("open-sse/services/thinkingBudget.ts", "utf8");
 
-  test("#77 both cache-write sites pass thinkingEnabled + interleavedField (read-side symmetry)", () => {
-    const matches = chatCore.match(
-      /requiresReasoningReplay\(\{\s*provider,\s*model,\s*thinkingEnabled:[\s\S]*?interleavedField:[\s\S]*?\}\)/g
+  test("#77 both cache-write sites gate via shouldCacheReasoning (read-side symmetry)", () => {
+    // nnd.28: 两处内联门控去重为 shouldCacheReasoning——对称契约
+    // (thinkingEnabled + interleavedField) 由 helper 承载，两写入点都走它。
+    assert.match(
+      chatCore,
+      /function shouldCacheReasoning\([\s\S]*?thinkingEnabled:[\s\S]*?interleavedField:/
     );
-    assert.equal(matches?.length, 2, `expected 2 symmetric write gates, got ${matches?.length}`);
+    const gateCall = "if (shouldCacheReasoning(provider, model, finalBody || translatedBody))";
+    const callSites = chatCore.split(gateCall).length - 1;
+    assert.equal(
+      callSites,
+      2,
+      `expected 2 symmetric write gates, got ${callSites}`
+    );
   });
 
   test("#78 aggregated reasoning_content strips the internal sentinel (both sites)", () => {
