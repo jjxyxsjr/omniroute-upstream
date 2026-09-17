@@ -44,25 +44,28 @@ test("processStreamingThinkDelta extracts content and reasoning across split tag
   const second = processStreamingThinkDelta("nk>plan</th", ctx);
   const third = processStreamingThinkDelta("ink> world", ctx);
 
+  // #87 multi-tag buffering: only a tail that can still grow into an open tag
+  // stays buffered, so "Hello " flushes immediately (the old form held back a
+  // fixed 6-char tail). The reasoning/content totals are unchanged.
   assert.deepEqual(first, {
     reasoningDelta: null,
-    contentDelta: "Hell",
+    contentDelta: "Hello ",
   });
   assert.deepEqual(second, {
     reasoningDelta: null,
-    contentDelta: "o ",
+    contentDelta: null,
   });
   assert.deepEqual(third, {
     reasoningDelta: "plan",
-    contentDelta: null,
+    contentDelta: " world",
   });
   assert.equal(ctx.insideThink, false);
-  assert.equal(ctx.buffer, " world");
+  assert.equal(ctx.buffer, "");
 
   const flushed = flushThinkBuffer(ctx);
   assert.deepEqual(flushed, {
     reasoningDelta: null,
-    contentDelta: " world",
+    contentDelta: null,
   });
 });
 
@@ -85,11 +88,13 @@ test("applyThinkTag buffers an open tag split as '<think' + '>' across deltas", 
   };
   assert.equal(applyThinkTag(ctx, rest), true);
   assert.equal(rest.reasoning_content, "plan");
-  assert.equal(rest.content, "");
+  // #87: "answer" cannot grow into a tag, so it flushes in this delta instead
+  // of waiting for end-of-stream.
+  assert.equal(rest.content, "answer");
 
   assert.deepEqual(flushThinkBuffer(ctx), {
     reasoningDelta: null,
-    contentDelta: "answer",
+    contentDelta: null,
   });
 });
 

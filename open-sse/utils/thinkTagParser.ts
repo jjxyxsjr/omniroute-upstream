@@ -15,20 +15,35 @@
  *   // content = "final answer..."
  */
 
-import { shouldParseTextualReasoningTags } from "../handlers/responseSanitizer/reasoning.ts";
+import { REASONING_TAG_NAMES, shouldParseTextualReasoningTags } from "../handlers/responseSanitizer/reasoning.ts";
 import { appendBoundedText, buildSyntheticChatChunk } from "./streamHelpers.ts";
 
+// Open tags are derived from the shared tag-name list so the streaming parser
+// and the aggregate extractor can never drift apart (MiniMax M3's Chinese tags
+// 思考/反思/推理/推敲 included — hermes-agent#43827).
+const THINK_OPEN_TAGS: readonly string[] = REASONING_TAG_NAMES.map((name) => `<${name}>`);
+
+function closeTagFor(name: string): string {
+  return `</${name}>`;
+}
+
+// Legacy single-tag forms, kept verbatim for the deprecated extractThinkTags /
+// hasThinkTags convenience exports (no internal callers) — the multi-tag
+// machinery below does not use them.
 const THINK_OPEN = "<think>";
 const THINK_CLOSE = "</think>";
 
 /**
- * Every proper prefix of `<think>` ("<", "<t", ... "<think"), derived from the
- * tag itself so the list cannot drift out of sync with it.
+ * Every proper prefix of every open tag ("<", "<t", ... "<think", "<思", ...),
+ * derived from the open tags themselves so the list cannot drift out of sync.
  */
-const THINK_OPEN_PARTIALS: readonly string[] = Array.from(
-  { length: THINK_OPEN.length - 1 },
-  (_, i) => THINK_OPEN.slice(0, i + 1)
-);
+const THINK_OPEN_PARTIALS: readonly string[] = (() => {
+  const seen = new Set<string>();
+  for (const tag of THINK_OPEN_TAGS) {
+    for (let i = 1; i < tag.length; i++) seen.add(tag.slice(0, i));
+  }
+  return [...seen];
+})();
 
 /**
  * Create the mutable streaming-parse context for one SSE stream.
@@ -46,6 +61,9 @@ export function initThinkState(isPassthroughMode: boolean, provider?: unknown, m
   return {
     enabled: isPassthroughMode && shouldParseTextualReasoningTags(provider, model),
     insideThink: false,
+    // Name of the currently open tag, so the closing tag pairs with the same
+    // name (multi-tag support: <think> … <思考> …).
+    currentTag: null as string | null,
     buffer: "",
     active: false,
     model,
@@ -53,7 +71,34 @@ export function initThinkState(isPassthroughMode: boolean, provider?: unknown, m
 }
 
 /**
- * Check whether a streaming text chunk contains a full `<think>` open tag,
+ * Find the earliest open tag in `buffer`. Returns the tag's name and the
+ * index of its "<", or null when no open tag is present.
+ */
+function findEarliestOpenTag(buffer: string): { name: string; index: number } | null {
+  let best: { name: string; index: number } | null = null;
+  for (let i = 0; i < REASONING_TAG_NAMES.length; i++) {
+    const idx = buffer.indexOf(THINK_OPEN_TAGS[i]);
+    if (idx !== -1 && (best === null || idx < best.index)) {
+      best = { name: REASONING_TAG_NAMES[i], index: idx };
+    }
+  }
+  return best;
+}
+
+/**
+ * Longest suffix of `buffer` that is a proper prefix of some open tag — the
+ * part that must stay buffered because a tag may be split across chunks.
+ * Returns "" when the tail cannot grow into an open tag.
+ */
+function trailingOpenTagPartial(buffer: string): string {
+  for (const partial of THINK_OPEN_PARTIALS) {
+    if (partial.length > 0 && buffer.endsWith(partial)) return partial;
+  }
+  return "";
+}
+
+/**
+ * Check whether a streaming text chunk contains a full open tag,
  * or ends with a prefix of one (so the caller knows to keep buffering
  * instead of treating the tag as ordinary content split across chunks).
  *
@@ -61,7 +106,7 @@ export function initThinkState(isPassthroughMode: boolean, provider?: unknown, m
  * @returns {boolean}
  */
 export function containsOrMayEndWithThinkOpenTag(value: string): boolean {
-  return value.includes(THINK_OPEN) || THINK_OPEN_PARTIALS.some((suffix) => value.endsWith(suffix));
+  return THINK_OPEN_TAGS.some((tag) => value.includes(tag)) || trailingOpenTagPartial(value) !== "";
 }
 
 /**
@@ -134,35 +179,41 @@ export function processStreamingThinkDelta(delta, ctx) {
 
   while (ctx.buffer.length > 0) {
     if (ctx.insideThink) {
-      // Looking for closing tag
-      const closeIdx = ctx.buffer.indexOf(THINK_CLOSE);
+      // Looking for the closing tag that pairs with the open one
+      const closeTag = closeTagFor(ctx.currentTag || "think");
+      const closeIdx = ctx.buffer.indexOf(closeTag);
       if (closeIdx === -1) {
         // Might be a partial tag at the end — keep last few chars
-        if (ctx.buffer.length > THINK_CLOSE.length) {
-          const safe = ctx.buffer.slice(0, -(THINK_CLOSE.length - 1));
+        if (ctx.buffer.length > closeTag.length) {
+          const safe = ctx.buffer.slice(0, -(closeTag.length - 1));
           reasoningDelta += safe;
-          ctx.buffer = ctx.buffer.slice(-(THINK_CLOSE.length - 1));
+          ctx.buffer = ctx.buffer.slice(-(closeTag.length - 1));
         }
         break;
       }
       reasoningDelta += ctx.buffer.slice(0, closeIdx);
-      ctx.buffer = ctx.buffer.slice(closeIdx + THINK_CLOSE.length);
+      ctx.buffer = ctx.buffer.slice(closeIdx + closeTag.length);
       ctx.insideThink = false;
+      ctx.currentTag = null;
     } else {
-      // Looking for opening tag
-      const openIdx = ctx.buffer.indexOf(THINK_OPEN);
-      if (openIdx === -1) {
-        // Might be a partial tag at the end
-        if (ctx.buffer.length > THINK_OPEN.length) {
-          const safe = ctx.buffer.slice(0, -(THINK_OPEN.length - 1));
-          contentDelta += safe;
-          ctx.buffer = ctx.buffer.slice(-(THINK_OPEN.length - 1));
+      // Looking for the earliest opening tag
+      const open = findEarliestOpenTag(ctx.buffer);
+      if (open === null) {
+        // Might be a partial tag at the end — keep only the partial prefix
+        const partial = trailingOpenTagPartial(ctx.buffer);
+        if (partial) {
+          contentDelta += ctx.buffer.slice(0, ctx.buffer.length - partial.length);
+          ctx.buffer = partial;
+        } else {
+          contentDelta += ctx.buffer;
+          ctx.buffer = "";
         }
         break;
       }
-      contentDelta += ctx.buffer.slice(0, openIdx);
-      ctx.buffer = ctx.buffer.slice(openIdx + THINK_OPEN.length);
+      contentDelta += ctx.buffer.slice(0, open.index);
+      ctx.buffer = ctx.buffer.slice(open.index + THINK_OPEN_TAGS[REASONING_TAG_NAMES.indexOf(open.name)].length);
       ctx.insideThink = true;
+      ctx.currentTag = open.name;
     }
   }
 

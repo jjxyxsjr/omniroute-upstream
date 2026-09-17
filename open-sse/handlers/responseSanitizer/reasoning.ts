@@ -1,13 +1,30 @@
-export const REASONING_TAG_NAMES = ["think", "thinking", "thought", "internal_thought"];
+// MiniMax M3 emits Chinese reasoning tags (思考/反思/推理/推敲) in addition to
+// <think> (NousResearch/hermes-agent#43827) — same extraction machinery as the
+// English names.
+export const REASONING_TAG_NAMES = [
+  "think",
+  "thinking",
+  "thought",
+  "internal_thought",
+  "思考",
+  "反思",
+  "推理",
+  "推敲",
+];
 export const REASONING_TAG_PATTERN = REASONING_TAG_NAMES.join("|");
-// Matches complete <think>/<thinking>/<thought>/<internal_thought> blocks.
+// `\b` is an ASCII word boundary: a CJK tag name is all non-\w chars, so
+// `思考\b` can never match "<思考>". The lookahead keeps the English
+// anti-prefix defense ("<thinkx>", "<think->" stay unmatched) while making CJK
+// names matchable.
+const TAG_NAME_END = "(?![-\\w])";
+// Matches complete <think>/<thinking>/…/<思考>/… blocks.
 export const THINK_TAG_REGEX = new RegExp(
-  `<(${REASONING_TAG_PATTERN})\\b[^>]*>([\\s\\S]*?)<\\/\\1>`,
+  `<(${REASONING_TAG_PATTERN})${TAG_NAME_END}[^>]*>([\\s\\S]*?)<\\/\\1>`,
   "gi"
 );
 export const REASONING_CLOSE_TAG_REGEX = new RegExp(`</(${REASONING_TAG_PATTERN})>`, "i");
 export const REASONING_TAG_FRAGMENT_REGEX = new RegExp(
-  `</?(${REASONING_TAG_PATTERN})\\b[^>]*>`,
+  `</?(${REASONING_TAG_PATTERN})${TAG_NAME_END}[^>]*>`,
   "gi"
 );
 export const CONTENT_OPEN_TAG_REGEX = /<content\b[^>]*>/i;

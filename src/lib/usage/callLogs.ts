@@ -12,6 +12,7 @@ import { getDbInstance } from "../db/core";
 import { getRequestDetailLogByCallLogId } from "../db/detailedLogs";
 import { shouldPersistToDisk } from "./migrations";
 import { getCallLogApiKeyContext } from "./callLogApiKeyContext";
+import { isReasoningOnlyResponse } from "./reasoningOnlyDetect";
 import {
   getLoggedInputTokens,
   getLoggedOutputTokens,
@@ -465,6 +466,16 @@ async function saveCallLogOperation(entry: any): Promise<void> {
     // while reasoning source/char-count are recorded separately for observability.
     const tokensReasoning = getReasoningTokensOrNull(entry.tokens);
     const reasoningObservation = resolveReasoningObservation(tokensReasoning, entry.responseBody);
+    // #87: "answer trapped in the thinking channel" is a status-200 failure —
+    // log it so ops sees it without waiting for a user report. Observe-only:
+    // never reclassifies, never locks.
+    if (entry.status === 200 && isReasoningOnlyResponse(entry.responseBody)) {
+      console.warn(
+        `[callLogs] reasoning-only response: provider=${rawProvider} model=${entry.model} ` +
+          `key=${apiKeyName ?? "-"} — non-empty reasoning_content (${reasoningObservation.chars ?? "?"} chars) ` +
+          `with empty content and no tool_calls (thinking-channel misroute?)`
+      );
+    }
     const errorType = classifyCallLogError(entry.status, entry.error, entry.provider);
     const logEntry = {
       id: typeof entry.id === "string" && entry.id.length > 0 ? entry.id : generateLogId(),
