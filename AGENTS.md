@@ -52,3 +52,9 @@ git merge upstream/release/vX.Y.Z
 - 运维手册：`deploy/docs/060-production.md`
 - 补丁清单：`deploy/docs/155-source-fork-patches.md`
 - 上游代码规范：`UPSTREAM-GUIDE.md`
+
+## 二开审计工具
+
+- **全量清单**：`bash skills/omniroute-dev/scripts/fork-manifest.sh` — 所有改动文件 × 哪些补丁碰的
+- **单文件审计**：`bash skills/omniroute-dev/scripts/fork-manifest.sh <file>` — 该文件被哪些补丁改过 + 与上游的完整 diff
+- **上游影响检查**：`bash skills/omniroute-dev/scripts/upstream-impact.sh` — 拉上游前跑，看会不会打到我们改过的文件（冲突预警）
