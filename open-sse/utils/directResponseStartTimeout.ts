@@ -70,6 +70,72 @@ export function resolveNonStreamTotalBudgetMs(
   return pooledMs + freshMs + NON_STREAM_BUDGET_SLACK_MS;
 }
 
+/**
+ * nnd.29 #88: volume-aware first-byte probe window. A flat 45s probe cannot
+ * distinguish "dead pooled socket" from "live upstream still prefilling a huge
+ * context": 600k-token Claude Code sessions measured 40-75s to first byte on
+ * glm (bare-fetch path, no probe → survived), while the same sessions on the
+ * proxyFetch direct path (ark-class anthropic-compatible) died at exactly 45s
+ * (2026-09-18 向海涛 2×504, 1821-message transcript). Tiers mirror the
+ * #53/#23 precedent of scaling deadlines by request parameters:
+ *   ≤512KB  → base (small bodies overrunning the probe ≈ dead connection)
+ *   >512KB  → ×2
+ *   >2MB    → ×3, capped at 180s.
+ * Fresh-socket and profile narrowing chain automatically (their floors are
+ * keyed to the pooled window). Kill switch: OMNIROUTE_DIRECT_HEADERS_VOLUME_ADAPTIVE=0.
+ */
+const LARGE_BODY_TIER_BYTES = 512 * 1024;
+const HUGE_BODY_TIER_BYTES = 2 * 1024 * 1024;
+const VOLUME_AWARE_WINDOW_CAP_MS = 180_000;
+
+export function isVolumeAdaptiveDirectHeadersEnabled(
+  env: Record<string, string | undefined> = process.env
+): boolean {
+  const raw = env.OMNIROUTE_DIRECT_HEADERS_VOLUME_ADAPTIVE;
+  if (raw == null || raw.trim() === "") return true;
+  return !(raw.trim().toLowerCase() === "0" || raw.trim().toLowerCase() === "false" || raw.trim().toLowerCase() === "off");
+}
+
+export function resolveVolumeAwareDirectHeadersTimeoutMs(
+  baseMs: number,
+  bodyBytes: number,
+  env: Record<string, string | undefined> = process.env
+): number {
+  if (!(baseMs > 0) || !(bodyBytes > 0)) return baseMs;
+  if (!isVolumeAdaptiveDirectHeadersEnabled(env)) return baseMs;
+  let factor = 1;
+  if (bodyBytes > HUGE_BODY_TIER_BYTES) factor = 3;
+  else if (bodyBytes > LARGE_BODY_TIER_BYTES) factor = 2;
+  if (factor === 1) return baseMs;
+  return Math.min(baseMs * factor, VOLUME_AWARE_WINDOW_CAP_MS);
+}
+
+/**
+ * Best-effort body size for the probe-window tier: Request → Content-Length
+ * (or cloned body length), string → length, ArrayBuffer/TypedArray →
+ * byteLength. Unknown shapes (streams, form data) return 0 = conservative
+ * base window (never widens on guesses).
+ */
+export function measureDirectRequestBodyBytes(
+  input: RequestInfo | URL,
+  options?: DirectFetchOptions
+): number {
+  try {
+    if (typeof Request !== "undefined" && input instanceof Request) {
+      const len = Number(input.headers.get("content-length"));
+      if (Number.isFinite(len) && len > 0) return len;
+      return 0;
+    }
+    const body = options?.body;
+    if (typeof body === "string") return Buffer.byteLength(body);
+    if (body instanceof ArrayBuffer) return body.byteLength;
+    if (ArrayBuffer.isView(body)) return (body as Uint8Array).byteLength;
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
 function createDirectResponseStartTimeout(timeoutMs: number): Error & { code: string } {
   const err = new Error(
     `Direct response did not start within ${timeoutMs}ms — retrying on a fresh socket`

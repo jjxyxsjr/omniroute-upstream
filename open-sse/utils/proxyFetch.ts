@@ -24,6 +24,8 @@ import {
   isDirectResponseStartTimeout,
   resolveDirectHeadersTimeoutMs,
   resolveFreshSocketResponseStartTimeoutMs,
+  resolveVolumeAwareDirectHeadersTimeoutMs,
+  measureDirectRequestBodyBytes,
 } from "./directResponseStartTimeout.ts";
 import { STREAM_READINESS_MAX_TIMEOUT_MS } from "../config/constants.ts";
 import {
@@ -821,7 +823,14 @@ async function patchedFetch(
     const _nativeFallback =
       (deps.nativeFetch as FetchWithDispatcher | undefined) ?? originalFetchWithDispatcher;
     let lastDispatcherError: unknown = null;
-    const directHeadersTimeoutMs = resolveDirectHeadersTimeoutMs();
+    // nnd.29 #88: volume-aware probe window — large bodies legitimately need
+    // longer to first byte (prefill), so the tier-scaled window replaces the
+    // flat probe here; the fresh-socket floor and profile narrowing below key
+    // off this value and follow automatically.
+    const directHeadersTimeoutMs = resolveVolumeAwareDirectHeadersTimeoutMs(
+      resolveDirectHeadersTimeoutMs(),
+      measureDirectRequestBodyBytes(input, options)
+    );
     // nnd.21 候A: the fresh-socket retry already ruled out pool poisoning, so it
     // must not re-copy the flat probe window — slow-to-first-byte upstreams
     // (ark-class anthropic-compatible send nothing, headers included, until
