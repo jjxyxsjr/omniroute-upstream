@@ -1,6 +1,6 @@
 # OmniRoute 生产运维指南（nnd fork）
 
-> 本仓是 diegosouzapw/OmniRoute 的生产 fork（已偏离 17 个发版、42 个补丁）。
+> 本仓是 diegosouzapw/OmniRoute 的生产 fork（截至 2026-09-21：nnd.1→nnd.29 共 29 个发版代次，补丁 #1-#88 在册）。
 > 上游的代码贡献规范见 `UPSTREAM-GUIDE.md`（拉上游更新时参考）。
 
 ## 仓库拓扑（本仓实际结构）
@@ -13,10 +13,11 @@
 
 ## 生产线
 
-- 生产 VPS：172.16.90.229（容器 `omniroute`，端口 20128）
+- 生产 VPS：172.16.90.229（容器 `omniroute`，端口 20128；**当前版本以 `docker ps` 实测为准**，2026-09-21 时为 nnd.29）
 - 发版镜像：`omniroute:v3.8.50-nnd.N`（229 本地构建）
 - 补丁台账：`deploy/docs/155-source-fork-patches.md`
 - 生产台账：`deploy/docs/060-production.md`（每笔操作必记）
+- 上游合并预案：`deploy/docs/156-upstream-51-merge-study.md`（51 批挂起中：上游 tip 不可构建）
 
 ## Skill 体系（4 个）
 
@@ -35,7 +36,7 @@
 2. **上游无错公理**：URL 正确前提下上游永远无错，一切差值是我们的缺陷
 3. **发版必过四象限**：工具/视觉/思考/非流式 × claude/openai 八格全绿才准切生产
 4. **测试 key 用完必删**；不留禁用态同前缀 key
-5. **构建后清缓存**：`docker builder prune -f`（磁盘塞满事故教训）
+5. **构建后清缓存**：`docker builder prune --all -f`（cache mount 盲区曾积 108G；普通 -f 清不掉）
 6. **重启窗口**：工作时段 08:00-19:00 禁止，仅每日 BJ 07:15
 7. **所有操作记台账**：源码改动→155，生产操作→060，踩坑经验→skill
 
