@@ -287,7 +287,10 @@ export function errorResponseWithComboDiagnostics(
   statusCode: number,
   message: string,
   diagnostics: ComboDiagnostics,
-  opts: { code?: string; type?: string } = {}
+  // nnd.30: retryAfterSeconds sets the STANDARD Retry-After header (RFC 9110
+  // §10.2.3) so stock OpenAI/Anthropic SDK backoff engages — the
+  // x-omniroute-retry-after-seconds header alone is only read by our own tooling.
+  opts: { code?: string; type?: string; retryAfterSeconds?: number } = {}
 ): Response {
   const safe = sanitizeComboDiagnostics(diagnostics);
   const body = buildErrorBody(statusCode, message) as ErrorResponseBody & {
@@ -326,6 +329,10 @@ export function errorResponseWithComboDiagnostics(
     ) {
       headers["x-omniroute-retry-after-seconds"] = String(safe.recovery.retry_after_seconds);
     }
+  }
+
+  if (typeof opts.retryAfterSeconds === "number" && opts.retryAfterSeconds > 0) {
+    headers["Retry-After"] = String(Math.ceil(opts.retryAfterSeconds));
   }
 
   return new Response(JSON.stringify(body), {

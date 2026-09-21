@@ -2316,7 +2316,7 @@ test("handleComboChat normalizes legacy strategy names at runtime", async () => 
   assert.deepEqual(usageCalls, ["model-b"]);
 });
 
-test("handleComboChat returns a 503 when every model is unavailable before execution", async () => {
+test("handleComboChat returns a 429 (blocked-pool contract, nnd.30/161) when every model is unavailable before execution", async () => {
   const result = await handleComboChat({
     body: {},
     combo: {
@@ -2335,7 +2335,10 @@ test("handleComboChat returns a 503 when every model is unavailable before execu
   });
 
   const payload = (await result.json()) as any;
-  assert.equal(result.status, 503);
+  // nnd.30 (161): blocked-pool exit is rate-limit semantics (default 429;
+  // OMNIROUTE_BLOCKED_POOL_STATUS=503 restores the old status). 503
+  // service_unavailable invited client hammering during skip storms.
+  assert.equal(result.status, 429);
   assert.equal(payload.error.code, "ALL_TARGETS_SKIPPED");
 });
 

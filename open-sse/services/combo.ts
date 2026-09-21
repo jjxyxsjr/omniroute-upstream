@@ -22,6 +22,15 @@ import {
   recordProviderSuccess,
   selectLockoutCooldownMs,
 } from "./accountFallback.ts";
+// nnd.30 受阻池自适应闸门（161）：全目标短暂受阻时按"最早恢复时刻"
+// 有界挂起/诚实 429，取代 0.2s 秒拒 503 风暴。
+import {
+  createPoolBlockageGate,
+  resolveBlockedPoolStatus,
+  type PoolGateDecision,
+} from "./combo/poolBlockageGate.ts";
+// nnd.30 GLM 5h 窗去同步（161 D 件）：1308 重置点后按池内序号错峰回轮换。
+import { glmWindowStaggerExtraMs } from "./glmWindowStagger.ts";
 import {
   errorResponse,
   unavailableResponse,
@@ -1094,8 +1103,15 @@ async function handleComboChatInner({
     let lastError: string | null = null;
     let earliestRetryAfter: ComboRetryAfter | null = null;
     let lastStatus: number | null = null;
+    // nnd.30 受阻池闸门：跨 setTry 重入共享同一等待预算；label 供全跳过
+    // 分支挂起后重入本循环（setTry 回退一步，不消耗 set-retry 名额）。
+    const poolGate = createPoolBlockageGate({
+      comboName: combo.name,
+      log,
+      signal,
+    });
 
-    for (let setTry = 0; setTry <= maxSetRetries; setTry++) {
+    setLoop: for (let setTry = 0; setTry <= maxSetRetries; setTry++) {
       // #1731: Per-set-iteration set of providers whose quota is fully exhausted.
       // Reset each retry so providers excluded in a previous attempt get another chance.
       const exhaustedProviders = new Set<string>();
@@ -1124,6 +1140,10 @@ async function handleComboChatInner({
       let fallbackCount = 0;
       let recordedAttempts = 0;
       comboErrors = [];
+      // nnd.30: earliest wall-clock moment a skipped target becomes dispatchable
+      // again (model-lockout remaining / concurrency-cap poll signal). Reset per
+      // set iteration alongside the other accumulators.
+      let earliestSkipReadyAtMs: number | null = null;
 
       // QA P0: assemble a sanitized diagnostic trace from the state already in scope
       // (pool size + this set-try's exhausted providers/connections + attempt order +
@@ -1305,6 +1325,14 @@ async function handleComboChatInner({
         // Pre-check: skip models locked by the resilience system (model-level lockout)
         if (provider && rawModel && isModelLocked(provider, target.connectionId || "", rawModel)) {
           log.info("COMBO", `Skipping ${modelStr} — model locked by resilience (cooldown active)`);
+          // nnd.30: feed the pool gate — this lock's remaining time is the
+          // candidate "earliest seat ready" moment for an all-skipped park.
+          const lockInfo = getModelLockoutInfo(provider, target.connectionId || "", rawModel);
+          if (lockInfo && lockInfo.remainingMs > 0) {
+            const readyAt = Date.now() + lockInfo.remainingMs;
+            earliestSkipReadyAtMs =
+              earliestSkipReadyAtMs == null ? readyAt : Math.min(earliestSkipReadyAtMs, readyAt);
+          }
           recordComboDecision(traceInvocationId, {
             step: target.executionKey,
             target: modelStr,
@@ -1428,6 +1456,14 @@ async function handleComboChatInner({
               "COMBO",
               `Skipping ${modelStr} — connection ${connectionId} is at max concurrency cap (${maxConcurrentCap})`
             );
+            // nnd.30: cap releases have no wall-clock ETA (in-flight calls finish
+            // whenever they finish) — report a one poll-slice signal so the pool
+            // gate re-checks instead of rejecting outright.
+            {
+              const readyAt = Date.now() + 1_000;
+              earliestSkipReadyAtMs =
+                earliestSkipReadyAtMs == null ? readyAt : Math.min(earliestSkipReadyAtMs, readyAt);
+            }
             recordComboDecision(traceInvocationId, {
               step: target.executionKey,
               target: modelStr,
@@ -2347,6 +2383,29 @@ async function handleComboChatInner({
             if (!protectedPriorityTarget && provider && rawModel && retry === 0 && !scopedFailure) {
               const mlSettings = resolveModelLockoutSettings(settings);
               if (mlSettings.enabled && mlSettings.errorCodes.includes(result.status)) {
+                // nnd.30 GLM 窗去同步（161 D 件）：1308 类"已验证上游重置点"上
+                // 叠加池内序号×错峰步长，把七账号同分钟集体见底摊开。只对
+                // glm-cn + 已验证 reset 生效（合成估计绝不被拉长）。
+                const upstreamResetVerified = lockoutHintMs > mlSettings.baseCooldownMs;
+                const hintedCooldownMs = selectLockoutCooldownMs(lockoutHintMs, mlSettings);
+                const staggerExtraMs =
+                  hintedCooldownMs != null
+                    ? glmWindowStaggerExtraMs({
+                        provider,
+                        connectionId: targetWithConnection.connectionId || "",
+                        upstreamResetVerified,
+                      })
+                    : 0;
+                const exactCooldownMs =
+                  staggerExtraMs > 0 ? hintedCooldownMs! + staggerExtraMs : hintedCooldownMs;
+                if (staggerExtraMs > 0) {
+                  log.info(
+                    "COMBO",
+                    `GLM window stagger: extending ${modelStr} lockout by ${(
+                      staggerExtraMs / 60000
+                    ).toFixed(0)}min past upstream reset (desync 5h windows across pool)`
+                  );
+                }
                 recordModelLockoutFailure(
                   provider,
                   targetWithConnection.connectionId || "",
@@ -2360,12 +2419,12 @@ async function handleComboChatInner({
                     // the short base cooldown / exponential backoff when present. #7940's
                     // maxCooldownMs cap only applies to synthetic values — a verified
                     // upstream reset (lockoutHintVerified) bypasses it.
-                    exactCooldownMs: selectLockoutCooldownMs(lockoutHintMs, mlSettings),
+                    exactCooldownMs,
                     maxCooldownMs: mlSettings.maxCooldownMs,
                     // #6863: a parsed upstream quota reset is authoritative — the upstream
                     // told us exactly when it resets, so honor it in full instead of
                     // clamping to maxCooldownMs (which only bounds computed backoff).
-                    exactCooldownIsUpstreamReset: lockoutHintMs > mlSettings.baseCooldownMs,
+                    exactCooldownIsUpstreamReset: upstreamResetVerified,
                   }
                 );
                 lockoutRecorded = true;
@@ -2713,6 +2772,23 @@ async function handleComboChatInner({
       // Retry the entire set if more attempts remain
       if (setTry < maxSetRetries) continue;
 
+      // nnd.30 受阻池闸门（161）：全目标被"短暂"阻碍（模型冷却/并发帽）时
+      // 有界挂起后重入 setTry 循环，而不是立刻终态 503。两场事故的根：
+      // 钉扎会话×短冷却 25 连发、GLM 同步撞墙×洪峰 140 笔——秒拒只会把
+      // 客户端重试变成错误风暴。setTry 回退一步重入，不消耗 set-retry 名额；
+      // 预算/队列/开关全部由 poolBlockageGate 仲裁。
+      if (recordedAttempts === 0 && earliestSkipReadyAtMs != null && lastStatus == null) {
+        const gateDecision: PoolGateDecision = await poolGate.parkFor(earliestSkipReadyAtMs);
+        if (gateDecision === "redispatch") {
+          setTry -= 1;
+          continue setLoop;
+        }
+        if (gateDecision === "abort") {
+          return errorResponse(499, "Client disconnected while waiting for a blocked pool");
+        }
+        // "timeout"（含闸门关闭/队列满）→ 落到下方终态，带 Retry-After。
+      }
+
       // All set retries exhausted — return the final error
       // #10681: finalize the decision trace (all targets failed or skipped).
       finalizeComboTrace(traceInvocationId, orderedTargets);
@@ -2732,12 +2808,40 @@ async function handleComboChatInner({
             latencyMs,
             fallbackCount,
           });
+          // nnd.30: 受阻=限流语义（默认 429，可回 503 热锚）+ 标准 Retry-After
+          // 头 + 北京时刻恢复点——把"立刻硬重试"的信号换成"到点再试"。
+          const blockedStatus = resolveBlockedPoolStatus();
+          const readyAtMs =
+            earliestSkipReadyAtMs != null && earliestSkipReadyAtMs > Date.now()
+              ? earliestSkipReadyAtMs
+              : null;
+          const retryAfterSeconds = readyAtMs
+            ? Math.ceil((readyAtMs - Date.now()) / 1000) + 1
+            : undefined;
+          const readyAtText = readyAtMs
+            ? new Date(readyAtMs).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })
+            : null;
+          const blockedMessage = readyAtText
+            ? `All targets are briefly unavailable (cooldown/capacity); earliest recovery at ${readyAtText} (Beijing) — retry after ${retryAfterSeconds}s`
+            : "Service temporarily unavailable: all targets were skipped by pre-dispatch filters";
+          const diag = buildComboDiag("all_targets_skipped");
+          if (readyAtMs && retryAfterSeconds) {
+            diag.recovery = {
+              action: "wait",
+              next_step: `席位冷却/并发帽短暂受阻，约 ${retryAfterSeconds}s 后重试`,
+              retry_after_seconds: retryAfterSeconds,
+            };
+          }
           return withQuotaExhaustionClassification(
             errorResponseWithComboDiagnostics(
-              503,
-              "Service temporarily unavailable: all targets were skipped by pre-dispatch filters",
-              buildComboDiag("all_targets_skipped"),
-              { code: "ALL_TARGETS_SKIPPED", type: "service_unavailable" }
+              blockedStatus,
+              blockedMessage,
+              diag,
+              {
+                code: "ALL_TARGETS_SKIPPED",
+                type: blockedStatus === 429 ? "rate_limit_error" : "service_unavailable",
+                retryAfterSeconds,
+              }
             ),
             observedFailure ? allObservedFailuresQuota : null
           );

@@ -146,7 +146,9 @@ test("T24: all inactive accounts return 503 service_unavailable (not 406)", asyn
     allCombos: null,
   });
 
-  assert.equal(result.status, 503);
+  // nnd.30 (161): blocked-pool exit defaults to 429 (rate-limit semantics);
+  // T24's intent — distinct from 406 — holds under 429.
+  assert.equal(result.status, 429);
   const body = (await result.json()) as any;
   assert.equal(body.error?.code, "ALL_TARGETS_SKIPPED");
 });
