@@ -2777,16 +2777,33 @@ async function handleComboChatInner({
       // 钉扎会话×短冷却 25 连发、GLM 同步撞墙×洪峰 140 笔——秒拒只会把
       // 客户端重试变成错误风暴。setTry 回退一步重入，不消耗 set-retry 名额；
       // 预算/队列/开关全部由 poolBlockageGate 仲裁。
-      if (recordedAttempts === 0 && earliestSkipReadyAtMs != null && lastStatus == null) {
-        const gateDecision: PoolGateDecision = await poolGate.parkFor(earliestSkipReadyAtMs);
-        if (gateDecision === "redispatch") {
-          setTry -= 1;
-          continue setLoop;
+      if (recordedAttempts === 0 && lastStatus == null) {
+        // 兜底自算：跳过点喂不到的静默分支（trial 实弹逮出的 auth-403 类
+        // 锁走无日志跳过）——全跳过时阻断原因必然还在锁库里，直接复查
+        // 全部目标的模型锁剩余，任何跳过路径都逃不过这张网。
+        if (earliestSkipReadyAtMs == null) {
+          for (const t of orderedTargets) {
+            const parsed = parseModel(t.modelStr);
+            if (!t.provider || !parsed.model) continue;
+            const info = getModelLockoutInfo(t.provider, t.connectionId || "", parsed.model);
+            if (info && info.remainingMs > 0) {
+              const readyAt = Date.now() + info.remainingMs;
+              earliestSkipReadyAtMs =
+                earliestSkipReadyAtMs == null ? readyAt : Math.min(earliestSkipReadyAtMs, readyAt);
+            }
+          }
         }
-        if (gateDecision === "abort") {
-          return errorResponse(499, "Client disconnected while waiting for a blocked pool");
+        if (earliestSkipReadyAtMs != null) {
+          const gateDecision: PoolGateDecision = await poolGate.parkFor(earliestSkipReadyAtMs);
+          if (gateDecision === "redispatch") {
+            setTry -= 1;
+            continue setLoop;
+          }
+          if (gateDecision === "abort") {
+            return errorResponse(499, "Client disconnected while waiting for a blocked pool");
+          }
+          // "timeout"（含闸门关闭/队列满）→ 落到下方终态，带 Retry-After。
         }
-        // "timeout"（含闸门关闭/队列满）→ 落到下方终态，带 Retry-After。
       }
 
       // All set retries exhausted — return the final error
