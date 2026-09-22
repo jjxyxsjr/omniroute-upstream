@@ -1,6 +1,6 @@
 # OmniRoute 生产运维指南（nnd fork）
 
-> 本仓是 diegosouzapw/OmniRoute 的生产 fork（截至 2026-09-21：nnd.1→nnd.29 共 29 个发版代次，补丁 #1-#88 在册）。
+> 本仓是 diegosouzapw/OmniRoute 的生产 fork（截至 2026-09-22：nnd.1→nnd.30 共 30 个发版代次，补丁 #1-#90 在册；#90 错峰生产禁用——GLM 七账号窗同步是操作员故意设计）。
 > 上游的代码贡献规范见 `UPSTREAM-GUIDE.md`（拉上游更新时参考）。
 
 ## 仓库拓扑（本仓实际结构）
@@ -13,7 +13,7 @@
 
 ## 生产线
 
-- 生产 VPS：172.16.90.229（容器 `omniroute`，端口 20128；**当前版本以 `docker ps` 实测为准**，2026-09-21 时为 nnd.29）
+- 生产 VPS：172.16.90.229（容器 `omniroute`，端口 20128；**当前版本以 `docker ps` 实测为准**，2026-09-22 00:01 起 nnd.30，回滚锚 nnd.29）
 - 发版镜像：`omniroute:v3.8.50-nnd.N`（229 本地构建）
 - 补丁台账：`deploy/docs/155-source-fork-patches.md`
 - 生产台账：`deploy/docs/060-production.md`（每笔操作必记）
