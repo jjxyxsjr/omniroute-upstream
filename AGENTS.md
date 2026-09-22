@@ -1,6 +1,6 @@
 # OmniRoute 生产运维指南（nnd fork）
 
-> 本仓是 diegosouzapw/OmniRoute 的生产 fork（编号至 nnd.30、nnd.2 无档待考，补丁 #1-#90 在册；#90 错峰生产禁用——GLM 七账号窗同步是操作员故意设计）。
+> 本仓是 diegosouzapw/OmniRoute 的生产 fork（编号至 nnd.30，nnd.2 镜像曾构建但从未上线——生产 nnd.1→nnd.3，实发 29 代，见 060 8-25/8-26 条；补丁 #1-#90 在册，#90 错峰生产禁用——GLM 七账号窗同步是操作员故意设计）。
 > 上游的代码贡献规范见 `UPSTREAM-GUIDE.md`（拉上游更新时参考）。
 
 ## 仓库拓扑（本仓实际结构）
