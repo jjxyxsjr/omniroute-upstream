@@ -45,6 +45,8 @@ import { buildPostCallGuardrailContext } from "./chatCore/postCallGuardrailConte
 import { storeSemanticCacheResponse } from "./chatCore/semanticCacheStore.ts";
 import { buildNonStreamingResponseHeaders } from "./chatCore/nonStreamingResponseHeaders.ts";
 import { maybeWrapForcedNonStreamingResponsesJson } from "./chatCore/responsesJsonToSse.ts";
+// nnd #80: force-upstream-streaming resolver (kill switch env in the module).
+import { resolveForceUpstreamStreaming } from "./chatCore/forceUpstreamStreaming.ts";
 import { enforceOutputTokenBudget } from "./chatCore/outputTokenBudget.ts";
 import { maybeConvertJsonBodyToSse } from "./chatCore/jsonBodyToSse.ts";
 import { withResilienceActionsContext } from "./chatCore/resilienceAttemptContext.ts";
@@ -2360,7 +2362,18 @@ async function handleChatCoreInner({
   // wants JSON; the non-streaming branch below accumulates the SSE and converts
   // it back to JSON (same mechanism already used for Claude-Code-compatible
   // providers via isClaudeCodeCompatible).
-  const upstreamStream = stream || isClaudeCodeCompatible || providerRequiresStreaming;
+  // #80 (nnd.27): force upstream streaming even for non-stream clients — with a
+  // streaming upstream response headers arrive in seconds, so the bounded
+  // response-start window stays a liveness probe instead of a completion-time
+  // cap (2026-09-16 review-bot 504 storm class). Codex /responses/compact is
+  // JSON-only by contract and stays exempt. Kill switch:
+  // OMNIROUTE_FORCE_UPSTREAM_STREAM=0 restores the legacy request-shape
+  // passthrough.
+  const forceUpstreamStreaming =
+    resolveForceUpstreamStreaming() &&
+    !(nativeCodexPassthrough && isCompactResponsesEndpoint(endpointPath));
+  const upstreamStream =
+    stream || isClaudeCodeCompatible || providerRequiresStreaming || forceUpstreamStreaming;
   let ccSessionId: string | null = null;
   const stripTypes = getStripTypesForProviderModel(provider || "", model || "");
 
