@@ -86,8 +86,10 @@ test("opposite-family-only telemetry fails open as unknown", () => {
 
   assert.equal(gemini, null);
   assert.equal(claude, null);
-  assert.equal(scoreResetAwareQuota(gemini, resolveResetAwareConfig({})).score, 0.5);
-  assert.equal(scoreResetAwareQuota(claude, resolveResetAwareConfig({})).score, 0.5);
+  // nnd.31: 003-arkscore lowered the no-quota floor from 0.5 to 0.35 so a
+  // provider without a quota fetcher can't pin traffic above real GLM scores.
+  assert.equal(scoreResetAwareQuota(gemini, resolveResetAwareConfig({})).score, 0.35);
+  assert.equal(scoreResetAwareQuota(claude, resolveResetAwareConfig({})).score, 0.35);
 });
 
 test("Claude family excludes unknown weekly buckets", () => {
@@ -134,7 +136,10 @@ test("reset-aware fetch scope is family-wide for Antigravity and * otherwise", (
 });
 
 test("buildAutoCandidates uses the shared Antigravity fetch-scope helper", () => {
-  const combo = fs.readFileSync(new URL("../../open-sse/services/combo.ts", import.meta.url), "utf8");
+  const combo = fs.readFileSync(
+    new URL("../../open-sse/services/combo.ts", import.meta.url),
+    "utf8"
+  );
   const strategies = fs.readFileSync(
     new URL("../../open-sse/services/combo/quotaStrategies.ts", import.meta.url),
     "utf8"
