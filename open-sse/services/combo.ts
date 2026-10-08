@@ -9,6 +9,9 @@ import { errorResponseWithComboDiagnostics } from "../utils/error.ts";
 
 import { recordComboFailure } from "./combo/failureTracker.ts";
 import { buildRecoveryHint } from "./combo/pinRecovery.ts";
+// nnd 007-a1/010: dead-candidate + saturation filtering for auto candidates.
+import { isModelLocked, isAccountSemaphoreFull } from "./accountFallback.ts";
+import { positiveConnectionCap } from "./combo/quotaStrategies.ts";
 import { buildTargetTimeoutRunner } from "./combo/targetTimeoutRunner.ts";
 import { getComboMetrics } from "./comboMetrics.ts";
 import { qualityScoreFor } from "./routing/index.ts";
@@ -546,12 +549,45 @@ export async function buildAutoCandidates(
 
   // Filter out candidates whose model is hidden by the user in the dashboard,
   // then drop vendor-retired ids so auto-combo cannot pick them (#11625).
+  // 007-a1 (nnd): also drop candidates whose (provider, connection, model) is
+  // currently model-locked, or whose connection is inside an active
+  // rateLimitedUntil cooldown. Without this, a stale quota cache can keep a dead
+  // connection's reset-aware score high enough to WIN candidate selection; auth
+  // then finds no credentials for the forced connection and the combo 503s with
+  // ALL_ACCOUNTS_INACTIVE (2026-08-21 incident). Dead candidates never reach
+  // winner election — the strategy falls through to the next healthy connection.
   maybeWarnBootstrapDominant(hasStats);
+  const visibilityKept = candidates.filter((c) => {
+    const hiddenModels = hiddenModelsMap.get(c.provider);
+    if (hiddenModels?.has(c.model)) return false;
+    if (c.connectionId) {
+      if (isModelLocked(c.provider, c.connectionId, c.model)) return false;
+      const conn = connectionById.get(c.connectionId) as
+        { rateLimitedUntil?: string | number | null } | undefined;
+      const cooldownUntil =
+        conn?.rateLimitedUntil == null ? NaN : new Date(conn.rateLimitedUntil).getTime();
+      if (Number.isFinite(cooldownUntil) && cooldownUntil > Date.now()) return false;
+    }
+    return true;
+  });
+
+  // 010 (nnd saturation spillover): auto candidates whose connection's account
+  // semaphore is at capacity are skipped before winner election, so auto-combo
+  // falls through to the next healthy connection instead of queueing behind a
+  // long job at dispatch (2026-08-24 ark lane jam). Reads the SAME gate the
+  // dispatch path acquires via the lock-free isAccountSemaphoreFull. When every
+  // candidate is saturated the unfiltered list is kept — this filter must never
+  // empty the candidate set; queueing remains the floor.
+  const saturationKept = visibilityKept.filter((c) => {
+    if (!c.connectionId) return true;
+    const cap = positiveConnectionCap(
+      connectionById.get(c.connectionId) as Record<string, unknown> | undefined
+    );
+    if (cap === null) return true;
+    return !isAccountSemaphoreFull(c.provider, c.connectionId, cap);
+  });
   return rejectRetiredAutoComboCandidates(
-    candidates.filter((c) => {
-      const hiddenModels = hiddenModelsMap.get(c.provider);
-      return !hiddenModels?.has(c.model);
-    })
+    saturationKept.length > 0 ? saturationKept : visibilityKept
   );
 }
 

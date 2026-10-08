@@ -286,8 +286,8 @@ export function transformOpenAISSEToGeminiSSE(upstreamResponse: Response, model:
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
+      "X-Accel-Buffering": "no",
     },
-    "X-Accel-Buffering": "no",
   });
 }
 

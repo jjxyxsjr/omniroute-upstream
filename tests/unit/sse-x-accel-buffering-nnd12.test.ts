@@ -18,13 +18,11 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 
 const { withEarlyStreamKeepalive } = await import("../../open-sse/utils/earlyStreamKeepalive.ts");
 const { checkSemanticCache } = await import("../../open-sse/handlers/chatCore/semanticCache.ts");
-const { generateSignature, setCachedResponse, clearCache } = await import(
-  "../../src/lib/semanticCache.ts"
-);
+const { generateSignature, setCachedResponse, clearCache } =
+  await import("../../src/lib/semanticCache.ts");
 const { createStreamingResponse } = await import("../../open-sse/utils/bypassResponse.ts");
-const { transformOpenAISSEToGeminiSSE } = await import(
-  "../../open-sse/translator/response/openai-to-gemini-sse.ts"
-);
+const { transformOpenAISSEToGeminiSSE } =
+  await import("../../open-sse/translator/response/openai-to-gemini-sse.ts");
 const { protectMcpSseResponse } = await import("../../open-sse/mcp-server/httpTransport.ts");
 const core = await import("../../src/lib/db/core.ts");
 
@@ -68,7 +66,11 @@ test("2g-c semantic-cache streaming HIT sends X-Accel-Buffering: no (JSON HIT do
   clearCache();
   const baseArgs = {
     semanticCacheEnabled: true,
-    body: { model: "gpt-4o", messages: [{ role: "user", content: "cached query" }], temperature: 0 },
+    body: {
+      model: "gpt-4o",
+      messages: [{ role: "user", content: "cached query" }],
+      temperature: 0,
+    },
     clientRawRequest: { headers: {} },
     model: "gpt-4o",
     provider: "openai",
@@ -79,6 +81,14 @@ test("2g-c semantic-cache streaming HIT sends X-Accel-Buffering: no (JSON HIT do
     log: { debug: () => {} },
     persistAttemptLogs: () => {},
     apiKeyId: null,
+    // nnd.31: 51 threads a pending-request scope through checkSemanticCache.
+    pendingScope: {
+      id: null,
+      model: "gpt-4o",
+      provider: "openai",
+      connectionId: null,
+      videoTranscriptSensitive: false,
+    },
   };
   const cached = {
     id: "chatcmpl-cached-1",

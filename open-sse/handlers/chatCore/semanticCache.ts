@@ -154,6 +154,9 @@ export async function checkSemanticCache({
 
       const headers: Record<string, string> = {
         "Content-Type": cachedSse ? "text/event-stream" : "application/json",
+        // nnd.12: a streaming cache HIT is a synthetic SSE stream — tell reverse
+        // proxies (nginx et al.) not to buffer it, same as a live stream.
+        ...(cachedSse ? { "X-Accel-Buffering": "no" } : {}),
         // Keep the legacy `HIT` value verbatim: consumers match it exactly
         // (tests/unit/chatcore-semantic-cache.test.ts and the chat-route suites).
         // A similarity hit is distinguished by X-OmniRoute-Cache-Similarity below.

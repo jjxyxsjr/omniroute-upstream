@@ -322,7 +322,9 @@ async function dropSaturatedTargets(
   return kept.length > 0 ? kept : targets;
 }
 
-function positiveConnectionCap(connection: Record<string, unknown> | undefined): number | null {
+export function positiveConnectionCap(
+  connection: Record<string, unknown> | undefined
+): number | null {
   const raw = connection?.maxConcurrent ?? connection?.max_concurrent;
   const cap = typeof raw === "number" ? raw : Number(raw);
   return Number.isFinite(cap) && cap > 0 ? cap : null;
