@@ -436,6 +436,9 @@ function isSchemaAlreadyApplied(
       // ttft_ms (plus queue_wait_ms). Skip the upstream 195 ALTER so it does
       // not fail on the duplicate column; the ledger still records 195.
       return hasColumn(db, "call_logs", "ttft_ms");
+    case "198":
+      // nnd fork: queue_wait_ms already exists on a database that ran our 163.
+      return hasColumn(db, "call_logs", "queue_wait_ms");
     case "003":
       return hasColumn(db, "provider_nodes", "chat_path");
     case "095":

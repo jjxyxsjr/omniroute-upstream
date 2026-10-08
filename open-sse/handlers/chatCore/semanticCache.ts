@@ -78,7 +78,6 @@ export async function checkSemanticCache({
       // with a signature computed without them.
       const signature = generateSignature(
         model,
-        ...(cachedSse ? { "X-Accel-Buffering": "no" } : {}),
         body.messages ?? body.input,
         body.temperature,
         body.top_p,

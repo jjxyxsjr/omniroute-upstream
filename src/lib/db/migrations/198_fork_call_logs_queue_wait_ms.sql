@@ -1,0 +1,13 @@
+-- 198_fork_call_logs_queue_wait_ms.sql
+--
+-- nnd fork. Our pre-upstream 163_call_logs_latency_phases added BOTH ttft_ms and
+-- queue_wait_ms to call_logs. Upstream 195 independently added ttft_ms (handled by
+-- the isSchemaAlreadyApplied guard for 195), but no upstream migration ever adds
+-- queue_wait_ms. On a database that already ran our 163 the column exists; on a fresh
+-- database built purely from the 51 migration set it would be missing, while the fork
+-- INSERT lists queue_wait_ms — that made every saveCallLog fail with
+-- "table call_logs has no column named queue_wait_ms". Add the column here.
+--
+-- queue_wait_ms measures admission→dispatch gap (account-semaphore + rate-limit
+-- queueing). NULL for rows written before this migration and when not measured.
+ALTER TABLE call_logs ADD COLUMN queue_wait_ms INTEGER DEFAULT NULL;
