@@ -244,18 +244,6 @@ export const SUPERSEDED_DUPLICATE_MIGRATIONS = [
     supersededByVersion: "050",
     supersededByName: "session_account_affinity",
   },
-  // nnd fork: our pre-upstream 163_call_logs_latency_phases (already applied in
-  // production) shares version 163 with upstream 163_radar_feed_cache_generated_at.
-  // Its ttft_ms ALTER is re-delivered by upstream 195 (guarded by isSchemaAlreadyApplied),
-  // its radar_feed column by fork 197; queue_wait_ms remains our unique live column.
-  // Mark it superseded only to clear the version-collision gate — the ledger keeps its
-  // 163 record so the schema stays documented.
-  {
-    version: "163",
-    name: "call_logs_latency_phases",
-    supersededByVersion: "195",
-    supersededByName: "call_logs_ttft_ms",
-  },
 ] as const;
 
 export const PHYSICAL_SCHEMA_SENTINELS = [

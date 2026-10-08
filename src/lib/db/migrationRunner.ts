@@ -439,6 +439,12 @@ function isSchemaAlreadyApplied(
     case "198":
       // nnd fork: queue_wait_ms already exists on a database that ran our 163.
       return hasColumn(db, "call_logs", "queue_wait_ms");
+    case "199":
+      // nnd fork: our pre-upstream latency-phases migration (renumbered from 163,
+      // which upstream 51 re-uses for radar_feed_cache). Both columns exist on
+      // production; a fresh database gets them from upstream 195 + fork 198, so
+      // this file's idempotency guard covers the residual overlap (the index).
+      return hasColumn(db, "call_logs", "ttft_ms") && hasColumn(db, "call_logs", "queue_wait_ms");
     case "003":
       return hasColumn(db, "provider_nodes", "chat_path");
     case "095":
