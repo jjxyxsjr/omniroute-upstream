@@ -13,12 +13,10 @@ import { buildQoderCliNotFoundHint } from "@omniroute/open-sse/services/qoderCli
 // Use the shared open-sse token refresh with built-in dedup/race-condition cache
 import { getAccessToken } from "@omniroute/open-sse/services/tokenRefresh.ts";
 import { rotationGroupFor } from "@omniroute/open-sse/services/refreshSerializer.ts";
-import { getSharedConnectionTestDebounce } from "@/lib/connectionTestDebounce";
 import { saveCallLog } from "@/lib/usageDb";
 import { shouldHideLogs } from "@/lib/tokenHealthCheck";
 import { logProxyEvent } from "@/lib/proxyLogger";
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
-import { lockModelIfPerModelQuota } from "@omniroute/open-sse/services/accountFallback.ts";
 import {
   buildGitLabDuoProbeBody,
   buildGitLabDuoProbeHeaders,
@@ -29,7 +27,6 @@ import {
 import { providerAllowsOptionalApiKey } from "@/shared/constants/providers";
 import { shouldUseApiKeyConnectionTest } from "./webSessionTestDispatch";
 import { testCodexAppServerConnection, makeDiagnosis } from "./codexAppServerHealth";
-import { testArkPlanConnection } from "./arkPlanHealth";
 import { recoverKeyHealth } from "@omniroute/open-sse/services/apiKeyRotator.ts";
 import { lockModelIfPerModelQuota } from "@omniroute/open-sse/services/accountFallback.ts";
 import { shouldClearErrorStateOnValidProbe } from "@/lib/usage/providerLimits";
@@ -58,8 +55,6 @@ import { getRequestPeerLocality } from "@/shared/utils/apiAuth";
 /** POST body is optional; when present, only known fields are validated. */
 const providerConnectionTestBodySchema = z.object({
   validationModelId: z.string().max(500).optional(),
-  /** Bypass the 017 debounce for operator-initiated tests. */
-  forceRefresh: z.boolean().optional(),
 });
 
 function hasQoderToken(connection: any): boolean {
@@ -1001,14 +996,6 @@ export async function testSingleConnection(
   // connection down. Returns null for non-app-server connections (fall through).
   const appServerResult = await testCodexAppServerConnection(connection);
 
-  // Ark plan nodes (volces.com/api/{coding,plan}): the generic validator would
-  // fall through to a BILLED POST /v1/messages probe (their /models 404s), which
-  // keeps the plan active around the clock and pollutes the 5h window's
-  // first-request anchor (docs/201). A positively-successful V4 control-plane
-  // quota probe is non-billed and proves plan + AK/SK + network in one call —
-  // short-circuit valid. Returns null on anything but success (fall through).
-  const arkPlanResult = await testArkPlanConnection(connection);
-
   if ((runtime as any)?.diagnosis) {
     result = {
       valid: false,
@@ -1019,10 +1006,6 @@ export async function testSingleConnection(
   } else if (appServerResult) {
     result = await runWithProxyContext(proxyInfo?.proxy || null, () =>
       Promise.resolve(appServerResult)
-    );
-  } else if (arkPlanResult) {
-    result = await runWithProxyContext(proxyInfo?.proxy || null, () =>
-      Promise.resolve(arkPlanResult)
     );
   } else if (shouldUseApiKeyConnectionTest(connection.authType, provider)) {
     const enrichedConnection = validationModelId
@@ -1102,15 +1085,6 @@ export async function testSingleConnection(
   // #9623: a failed connection test must not paint the connection permanently red.
   // Previously a non-terminal failure wrote `testStatus: "error"` with
   // `rateLimitedUntil: null` — since the cooldown filter only ever skips entries
-  // A representative-model 402 on an openai-compatible / per-model-quota
-  // gateway must lock only that model (#12875). The connection stays
-  // selectable for sibling upstreams that still return 200.
-  const configuredModelId = typeof psd?.validationModelId === "string" ? psd.validationModelId : "";
-  const probedModelId = validationModelId || configuredModelId;
-  if (result.statusCode === 402 && probedModelId) {
-    lockModelIfPerModelQuota(provider, connectionId, probedModelId, "credits", 60 * 60 * 1000);
-  }
-
   // whose rateLimitedUntil is in the future, a null cooldown left the connection
   // permanently unavailable after a transient outage. Give non-terminal test
   // failures a short cooldown so the lazy-recovery path retries them.
@@ -1183,32 +1157,6 @@ export async function testSingleConnection(
     if (result.newTokens.expiresIn) {
       updateData.expiresAt = new Date(Date.now() + result.newTokens.expiresIn * 1000).toISOString();
     }
-  }
-
-  /**
-   * Debounced connection test (017). A dashboard tab left open re-fires the
-   * batch loop every ~300s; within the debounce window the previous completed
-   * result is replayed (debounced: true) with no upstream call, no DB health
-   * mutation, and no call_logs write. The scheduler and the operator's Test
-   * button pass forceRefresh to always run a real probe. Only completed tests
-   * (testedAt set) are cached — early outs like "not found" or a lease deferral
-   * stay uncached.
-   */
-  export async function testSingleConnection(
-    connectionId: string,
-    validationModelId?: string,
-    options?: { forceRefresh?: boolean }
-  ) {
-    const debounce = getSharedConnectionTestDebounce();
-    const cached = debounce.lookup(connectionId, { forceRefresh: options?.forceRefresh });
-    if (cached) {
-      return { ...(cached.result as Record<string, unknown>), debounced: true };
-    }
-    const result = await runConnectionTest(connectionId, validationModelId);
-    if (result && typeof result === "object" && (result as { testedAt?: unknown }).testedAt) {
-      debounce.record(connectionId, result, (result as { valid?: unknown }).valid !== true);
-    }
-    return result;
   }
 
   // Update status in db

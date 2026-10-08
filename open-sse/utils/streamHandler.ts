@@ -878,7 +878,6 @@ export function createDisconnectAwareStream(
  * @param opts.activeTimeoutMs - Override the total active-stream budget
  *   (defaults to STREAM_ACTIVE_TIMEOUT_MS). `0` disables the active watchdog.
  */
-if (!stallTimeoutMs || stallTimeoutMs <= 0) return;
 export function pipeWithDisconnect(
   providerResponse: Response,
   transformStream: TransformStream<Uint8Array, Uint8Array>,
