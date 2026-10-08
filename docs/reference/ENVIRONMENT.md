@@ -1573,6 +1573,20 @@ Containerized Chromium+VNC used for interactive browser-login credential capture
 | `OMNIROUTE_VNC_NETWORK` | `omniroute-vnc-browser-login` | `src/lib/vncSession/manifest.ts` | Dedicated Docker network the VNC login container joins (#12571) instead of the default bridge, so sibling containers can't reach its CDP bridge port. |
 | `VIBEPROXY_DATA_DIR` | _(unset)_ | `open-sse/services/notionThreadSessions.ts` | **Legacy alias** for `DATA_DIR`, checked only after both `DATA_DIR` and `OMNIROUTE_DATA_DIR` are unset. Locates the Notion web-thread session cache (`<dir>/notion-web-thread-sessions.json`). |
 
+### nnd fork: routing / recovery tuning
+
+| Variable | Default | Used by | Purpose |
+| --- | --- | --- | --- |
+| `OMNIROUTE_ARK_QUOTA_PROVIDERS` | _(unset)_ | `open-sse/services/arkQuotaFetcher.ts` | Comma-separated extra provider ids whose quota the Ark fetcher should poll. |
+| `OMNIROUTE_COMBO_MAX_DEADLINE_FAILURES` | _(unset)_ | `open-sse/services/combo` | Hard ceiling (ms) for how long the combo keeps trying dead targets before failing. |
+| `OMNIROUTE_CRASH_STORM_THRESHOLD` | `5` | `open-sse/services/crashStormBreaker.ts` | Error count that trips the crash-storm circuit breaker (#75). |
+| `OMNIROUTE_CRASH_STORM_WINDOW_MS` | `60000` | `open-sse/services/crashStormBreaker.ts` | Window (ms) over which failures are counted. |
+| `OMNIROUTE_KEEP_HIDDEN_COMBO_CANDIDATES` | `0` | `open-sse/services/combo` | Keep hidden/retired candidates instead of dropping them (debug). |
+| `OMNIROUTE_RESET_AWARE_NO_QUOTA_FLOOR` | `0.35` | `open-sse/services/combo/quotaScoring.ts` | Score floor for a target with no quota-fetcher result (003-arkscore). |
+| `STRIP_DEFER_TOOLS` | `1` | `src/sse/handlers/chat.ts` | Strip WorkBuddy ToolSearch/DeferExecuteTool pair; `0`/`false` disables (#005). |
+| `VOLC_ARK_ACCESS_KEY_ID` | _(unset)_ | `open-sse/services/arkQuotaFetcher.ts` | Volcengine Ark access key for the quota fetcher. |
+| `VOLC_ARK_SECRET_ACCESS_KEY` | _(unset)_ | `open-sse/services/arkQuotaFetcher.ts` | Volcengine Ark secret for the quota fetcher. |
+
 ---
 
 ## 26. Test & E2E Harness
