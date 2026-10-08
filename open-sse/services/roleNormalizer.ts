@@ -273,10 +273,19 @@ export function normalizeSystemRole(
       const foldedText = userText
         ? `[System Instructions]\n${systemContent}\n\n[User Message]\n${userText}`
         : `[System Instructions]\n${systemContent}`;
-      nonSystemMessages[firstUserIdx] = {
-        ...userMsg,
-        content: [{ type: "text", text: foldedText }, ...preservedParts],
-      };
+      if (preservedParts.length === 0) {
+        // Pure-text array content: flatten to the legacy string shape so the
+        // message stays byte-identical to the pre-009 behavior (tests assert
+        // the string; no non-text parts need preserving).
+        nonSystemMessages[firstUserIdx] = { ...userMsg, content: foldedText };
+      } else {
+        // 009: keep a leading folded text part and pass every non-text part
+        // (image_url / input_image / file…) through untouched.
+        nonSystemMessages[firstUserIdx] = {
+          ...userMsg,
+          content: [{ type: "text", text: foldedText }, ...preservedParts],
+        };
+      }
     } else {
       nonSystemMessages[firstUserIdx] = {
         ...userMsg,
