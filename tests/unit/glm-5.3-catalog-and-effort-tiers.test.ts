@@ -171,10 +171,13 @@ for (const provider of ["glm", "glm-cn", "glmt"]) {
     assert.equal(spec.supportsTools, true);
   });
 
-  test("GLM_PRICING covers glm-5.3-flash with GLM-5.3 parity", () => {
+  test("GLM_PRICING gives glm-5.3-flash its own published rate (not GLM-5.3 parity)", () => {
     const pricing = GLM_PRICING["glm-5.3-flash"];
     assert.ok(pricing, "GLM_PRICING should include glm-5.3-flash");
-    assert.deepEqual(pricing, GLM_PRICING["glm-5.3"]);
+    // nnd.31: upstream 51 priced flash independently (real per-token rate),
+    // unlike the other 5.3 ids which keep GLM-5.2 parity.
+    assert.equal(pricing.input, 0.075);
+    assert.equal(pricing.output, 0.25);
   });
 
   test(`${provider} GLM-5.3 entries mirror the GLM-5.2 shape (1M ctx, 128K out)`, () => {
