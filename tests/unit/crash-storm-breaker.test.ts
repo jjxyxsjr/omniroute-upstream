@@ -103,23 +103,25 @@ test("source guard: 50-line wiring — chatCore hook + combo.ts executeTarget ga
   const block = src.slice(pfStart, pfEnd);
   assert.match(block, /recordCrashFailure\(/);
 
-  const combo = readFileSync(join(root, "open-sse", "services", "combo.ts"), "utf8");
-  const gateStart = combo.indexOf("const executeTarget = async (");
-  assert.ok(gateStart >= 0, "executeTarget not found");
-  const gateEnd = combo.indexOf("providerCooldown.enabled", gateStart);
-  assert.ok(gateEnd > gateStart, "cooldown gate not found after executeTarget");
-  const gateRegion = combo.slice(gateStart, gateEnd);
+  const combo = readFileSync(
+    join(root, "open-sse", "services", "combo", "executeTargetGates.ts"),
+    "utf8"
+  );
+  const gateStart = combo.indexOf("isCrashStorming(provider)");
+  assert.ok(gateStart >= 0, "crash-storm gate not found in executeTargetGates");
+  const gateRegion = combo.slice(Math.max(0, gateStart - 400), gateStart + 600);
   assert.match(gateRegion, /isCrashStorming\(/);
   assert.match(gateRegion, /"crash_storm"/);
   assert.match(gateRegion, /stopProtectedPriorityTarget\(/);
 
-  // 喂点（主河道）：/v1/messages 全量经 src handleChat → combo 尝试环，失败在
-  // comboErrors.push 处收口（chatCore 侧钩是另一入口的河——实测旁路证明）。
-  // 质量 502（nnd.19 教训）与 body-specific 400 两个姊妹分支故意不喂。
-  const feedCall = combo.indexOf("recordCrashFailure(provider,");
-  assert.ok(feedCall > 0, "feed hook call not found in combo.ts");
-  const feedRegion = combo.slice(Math.max(0, feedCall - 800), feedCall + 200);
-  assert.match(feedRegion, /comboErrors\.push/);
+  // 喂点（主河道）：51 拆分后 crash 失败在 chatCore 的 providerFailure 块里
+  // recordCrashFailure(provider,...) 收口。验证该调用存在且位于 providerFailure
+  // 块（4695 起）到其结束标记之间。
+  const pfBlockStart = src.indexOf("providerFailure: if (!providerResponse.ok)");
+  const feedCall = src.indexOf("recordCrashFailure(provider,", pfBlockStart);
+  assert.ok(feedCall > pfBlockStart, "feed hook call not found inside providerFailure block");
+  const afterFeed = src.indexOf("break providerFailure", feedCall);
+  assert.ok(afterFeed > feedCall, "providerFailure block must close after feed hook");
 
   const trace = readFileSync(
     join(root, "open-sse", "services", "combo", "decisionTrace.ts"),
