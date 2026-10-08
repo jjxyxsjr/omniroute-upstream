@@ -1,0 +1,15 @@
+-- 197_fork_radar_feed_generated_at.sql
+--
+-- nnd fork backfill. Upstream delivered this ALTER as 163_radar_feed_cache_generated_at,
+-- but our pre-upstream 163_call_logs_latency_phases already occupies version 163 in the
+-- production ledger, so the upstream radar migration was skipped (pending is filtered by
+-- version). Re-issue its one statement here under a free number so radar_feed_cache gains
+-- the generated_at column the 51 code expects.
+--
+-- radar_feed_cache (migration 136) kept only fetched_at — when this install
+-- downloaded the feed — while the feed itself carries generatedAt, the date
+-- its data was built. Nothing downstream could tell a recent download from
+-- recent data: a feed fetched minutes ago can carry weeks-old figures. NULL on
+-- rows cached before this column existed — the date is unknown, and stays
+-- unknown rather than being stood in for by fetched_at.
+ALTER TABLE radar_feed_cache ADD COLUMN generated_at TEXT DEFAULT NULL;

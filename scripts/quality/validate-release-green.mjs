@@ -55,11 +55,12 @@ import { promisify } from "node:util";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parse as parseYaml } from "yaml";
+import { load as parseYaml } from "js-yaml";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..", "..");
 const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+export const ESLINT_TIMEOUT_MS = 60 * 60 * 1000;
 
 // Per-gate captured output. execFileSync buffers everything and the report only
 // shows a one-line summary, so without these files every red requires RE-RUNNING
@@ -177,6 +178,56 @@ export function parseEslintJson(out) {
     }
   }
   return null;
+}
+
+/**
+ * Turn one ESLint process result into release-green records.
+ *
+ * Keep process failures distinct from report parsing failures. In particular, a timed-out
+ * ESLint process has no JSON report by definition; collapsing its code-124 diagnostic into
+ * "could not parse eslint json" hides the actionable cause and sends maintainers debugging
+ * the parser instead of the gate ceiling.
+ */
+export function evaluateEslintRun({ code, out }, warningBaseline) {
+  const parsed = parseEslintJson(out);
+  if (!parsed) {
+    return [
+      {
+        id: "lint",
+        label: "ESLint",
+        kind: "hard",
+        ok: false,
+        detail:
+          code === 0
+            ? "ESLint exited successfully but produced no valid JSON report"
+            : firstFailureLine(out),
+      },
+    ];
+  }
+
+  const { errors, warnings } = eslintCounts(parsed);
+  const warningDrift = isDrift(warnings, warningBaseline);
+  return [
+    {
+      id: "lint-errors",
+      label: "ESLint errors",
+      kind: "hard",
+      ok: errors === 0,
+      detail: `${errors} error(s)`,
+    },
+    {
+      id: "eslint-warnings",
+      label: "ESLint warnings (ratchet)",
+      kind: "drift",
+      ok: !warningDrift,
+      detail:
+        warningBaseline == null
+          ? `${warnings} (no baseline)`
+          : `${warnings} vs baseline ${warningBaseline}${
+              warningDrift ? ` (+${warnings - warningBaseline} drift → rebaseline at release)` : ""
+            }`,
+    },
+  ];
 }
 
 /** Pull the cognitive-complexity violation count from the gate's output. */
@@ -348,6 +399,22 @@ export function classifyRunError(err, timeoutMs) {
 // every one a false-positive red against the release branch).
 const HERMETIC_SCRUB = ["OMNIROUTE_API_KEY", "OMNIROUTE_URL"];
 let hermetic = false;
+/**
+ * Env for the pack gate's provenance guard (#10427).
+ *
+ * `validate-pack-artifact.ts` checks `dist/BUILD_SHA` for ancestry against
+ * `OMNIROUTE_RELEASE_REF`, defaulting to `origin/main`. That default is right at
+ * PUBLICATION (npm-publish.yml runs on main) but structurally impossible here: this
+ * validator runs ON a release branch, whose tip is by definition NOT an ancestor of
+ * main mid-cycle, so the gate reported `off-release-line` on every single run and the
+ * tarball boot-smoke cascaded off it. `ci.yml` already resolves the same problem for
+ * `pull_request` by pointing the ref at the head under test; the checkable invariant
+ * here is identical — "the stamp matches the tree we just validated" — so point it at
+ * HEAD. This does not relax the guard: a dist/ built from some other commit still
+ * fails, and a missing BUILD_SHA still fails.
+ */
+const PACK_GATE_ENV = { OMNIROUTE_RELEASE_REF: "HEAD" };
+
 function buildGateEnv(extra) {
   const env = { ...process.env, FORCE_COLOR: "0", ...(extra || {}) };
   if (hermetic) for (const k of HERMETIC_SCRUB) delete env[k];
@@ -392,6 +459,37 @@ async function runAsync(cmd, cmdArgs, opts = {}) {
   } catch (err) {
     return classifyRunError(err, opts.timeout);
   }
+}
+
+/**
+ * Package-artifact gate, run the way ci.yml's pack job runs it (#10427).
+ *
+ * `check:pack-artifact` assembles dist/ through `build:cli` when staging is missing, and
+ * `build:cli` never writes dist/BUILD_SHA — only `build:release` does. Pointing the ref at
+ * HEAD (PACK_GATE_ENV) is not enough on its own: the guard still stops at "dist/BUILD_SHA is
+ * missing". ci.yml builds, stamps, then validates; mirror that order here. The guard is not
+ * relaxed: an unstamped dist/ or one built from another commit still fails.
+ */
+async function runPackArtifactGate(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  const steps = [
+    { cmd: npmCmd, args: ["run", "build:cli"] },
+    { cmd: process.execPath, args: ["scripts/build/write-build-sha.mjs"] },
+    {
+      cmd: npmCmd,
+      args: ["run", "check:pack-artifact"],
+      env: PACK_GATE_ENV,
+    },
+  ];
+  let out = "";
+  for (const step of steps) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return classifyRunError({ killed: true, signal: "SIGTERM" }, timeoutMs);
+    const result = await runAsync(step.cmd, step.args, { env: step.env, timeout: remaining });
+    out += result.out;
+    if (result.code !== 0) return { code: result.code, out };
+  }
+  return { code: 0, out };
 }
 
 async function main() {
@@ -451,16 +549,19 @@ async function main() {
 
   // ESLint: ONE pass → errors (hard) + warnings (drift)
   {
-    announce("ESLint (errors + warnings — ~5-15min)");
+    announce("ESLint (errors + warnings — ~15-45min)");
     // Suppressions-aware, matching `npm run lint` (Pacote 4 no-new-warnings): the frozen
     // pre-existing debt in config/quality/eslint-suppressions.json must not count as
-    // errors here — only NET-NEW violations are release reds. Timeout raised: a full
-    // repo pass takes ~14min alone and this pre-flight often runs alongside test suites.
-    const { out } = run(
+    // errors here — only NET-NEW violations are release reds. The cold release runner can
+    // exceed 30 minutes as the repository grows, and this pre-flight often runs under load.
+    const lintRun = run(
       "npx",
       [
         "eslint",
         ".",
+        "--cache",
+        "--cache-location",
+        ".eslintcache",
         "--format",
         "json",
         "--suppressions-location",
@@ -471,39 +572,16 @@ async function main() {
         // reason alone, which used to mask the real `--format json` report (#7837).
         "--pass-on-unpruned-suppressions",
       ],
-      { timeout: 30 * 60 * 1000 }
+      // The cold release runner crossed the old 30-minute ceiling as the repository grew,
+      // then the timeout text was misreported as invalid JSON. Keep a real upper bound, but
+      // leave enough headroom for the same full-tree walk that completes immediately after it
+      // under the complexity config on that runner.
+      { timeout: ESLINT_TIMEOUT_MS }
     );
+    const { out } = lintRun;
     saveGateLog("lint", out);
-    const parsed = parseEslintJson(out);
-    if (!parsed) {
-      record({
-        id: "lint",
-        label: "ESLint",
-        kind: "hard",
-        ok: false,
-        detail: "could not parse eslint json",
-      });
-    } else {
-      const { errors, warnings } = eslintCounts(parsed);
-      record({
-        id: "lint-errors",
-        label: "ESLint errors",
-        kind: "hard",
-        ok: errors === 0,
-        detail: `${errors} error(s)`,
-      });
-      const base = baselineValue("eslintWarnings");
-      const over = isDrift(warnings, base);
-      record({
-        id: "eslint-warnings",
-        label: "ESLint warnings (ratchet)",
-        kind: "drift",
-        ok: !over,
-        detail:
-          base == null
-            ? `${warnings} (no baseline)`
-            : `${warnings} vs baseline ${base}${over ? ` (+${warnings - base} drift → rebaseline at release)` : ""}`,
-      });
+    for (const result of evaluateEslintRun(lintRun, baselineValue("eslintWarnings"))) {
+      record(result);
     }
   }
 
@@ -638,7 +716,8 @@ async function main() {
         // forever) into a visible failure — survives at 100min.
         // Measured on idle .113: unavailable (checkout not found). Tightened to 80min from 100min as a conservative step. TODO: re-measure on idle .113 and tighten to ~1.8× measured.
         id: "unit",
-        label: "Unit tests (full suite, CI concurrency — ~30-50min idle, up to ~80min under load (awaiting idle .113 measurement, #9532))",
+        label:
+          "Unit tests (full suite, CI concurrency — ~30-50min idle, up to ~80min under load (awaiting idle .113 measurement, #9532))",
         args: ["run", "test:unit:ci"],
         timeout: 80 * 60 * 1000,
       },
@@ -665,13 +744,15 @@ async function main() {
       slow.push({
         id: "pack-artifact",
         label: "Package artifact (npm pack policy)",
-        args: ["run", "check:pack-artifact"],
+        run: runPackArtifactGate,
         timeout: 20 * 60 * 1000,
       });
     }
     slow.forEach((g) => announce(`${g.label} [parallel]`));
     const slowResults = await Promise.all(
-      slow.map((g) => runAsync(npmCmd, g.args, { timeout: g.timeout }))
+      slow.map((g) =>
+        g.run ? g.run(g.timeout) : runAsync(npmCmd, g.args, { timeout: g.timeout, env: g.env })
+      )
     );
     slow.forEach((g, i) => {
       const { code, out } = slowResults[i];
@@ -721,9 +802,7 @@ async function main() {
     }
   } else if (WITH_BUILD) {
     // --with-build without the suites (--quick): still verify the package artifact.
-    const { code, out } = await runAsync(npmCmd, ["run", "check:pack-artifact"], {
-      timeout: 20 * 60 * 1000,
-    });
+    const { code, out } = await runPackArtifactGate(20 * 60 * 1000);
     saveGateLog("pack-artifact", out);
     record({
       id: "pack-artifact",

@@ -13,11 +13,13 @@ const LINUX_DESKTOP_NAME = "omniroute.desktop";
 function resolveCliPath() {
   const candidates = [];
   if (process.argv[1]) candidates.push(process.argv[1]);
-  try {
-    const which = execSync("command -v omniroute 2>/dev/null", { encoding: "utf8" }).trim();
-    if (which) candidates.push(which);
-  } catch {
-    // command -v unavailable
+  if (process.platform !== "win32") {
+    try {
+      const which = execSync("command -v omniroute 2>/dev/null", { encoding: "utf8" }).trim();
+      if (which) candidates.push(which);
+    } catch {
+      // command -v unavailable
+    }
   }
   candidates.push(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "omniroute.mjs"));
 
@@ -114,10 +116,13 @@ function writeLinuxSystemdUnit(cliPath) {
   const unitDir = dirname(linuxSystemdUnitPath());
   mkdirSync(unitDir, { recursive: true });
   const envFile = join(userHomeDir(), ".omniroute", ".env");
+  const nodeBinDir = dirname(process.execPath);
+  const userLocalBin = join(userHomeDir(), ".local", "bin");
+  const pathEnv = `${nodeBinDir}:${userLocalBin}:/usr/local/sbin:/usr/local/bin:/usr/bin:/bin`;
   const lines = [
     "[Unit]",
     "Description=OmniRoute AI proxy router",
-    "After=network-online.target",
+    "After=network-online.target graphical-session.target",
     "Wants=network-online.target",
     "",
     "[Service]",
@@ -134,6 +139,7 @@ function writeLinuxSystemdUnit(cliPath) {
     `ExecStart=${buildServeExecLine(cliPath, { tray: false })}`,
     "Restart=on-failure",
     "RestartSec=5",
+    `Environment="PATH=${pathEnv}"`,
   ];
   if (existsSync(envFile)) lines.push(`EnvironmentFile=-${envFile}`);
   lines.push("", "[Install]", "WantedBy=default.target", "");

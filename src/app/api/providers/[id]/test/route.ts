@@ -1,15 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
-import {
-  getCachedProviderConnectionById,
-  updateProviderConnection,
-  isCloudEnabled,
-  resolveProxyForConnection,
-} from "@/lib/localDb";
+import { getCachedProviderConnectionById } from "@/lib/db/readCache";
+import { getProviderConnectionById, updateProviderConnection } from "@/lib/db/providers";
+import { isCloudEnabled, resolveProxyForConnection } from "@/lib/db/settings";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { syncToCloud } from "@/lib/cloudSync";
 import { validateProviderApiKey } from "@/lib/providers/validation";
+import { projectProviderValidationResultForPublicResponse } from "@/lib/providers/validation/transport";
 import { getCliRuntimeStatus } from "@/shared/services/cliRuntime";
 import { buildQoderCliNotFoundHint } from "@omniroute/open-sse/services/qoderCliResolve.ts";
 // Use the shared open-sse token refresh with built-in dedup/race-condition cache
@@ -32,18 +30,30 @@ import { providerAllowsOptionalApiKey } from "@/shared/constants/providers";
 import { shouldUseApiKeyConnectionTest } from "./webSessionTestDispatch";
 import { testCodexAppServerConnection, makeDiagnosis } from "./codexAppServerHealth";
 import { testArkPlanConnection } from "./arkPlanHealth";
-import { removeConnectionHealth } from "@omniroute/open-sse/services/apiKeyRotator.ts";
+import { recoverKeyHealth } from "@omniroute/open-sse/services/apiKeyRotator.ts";
+import { lockModelIfPerModelQuota } from "@omniroute/open-sse/services/accountFallback.ts";
+import { shouldClearErrorStateOnValidProbe } from "@/lib/usage/providerLimits";
 import { isConnectionUnavailableToAuxiliaryActivity } from "@/lib/exclusiveLeaseIsolation";
-import { classifyAmbiguousOrAuthError, type ClassifyFailureArgs } from "./mistralAmbiguousAuth";
 import { buildApiKeyConnectionTestResult } from "./apiKeyTestResult";
 import { classifyOAuthProbeInconclusive, OAUTH_TEST_CONFIG } from "./oauthTestConfig";
 import { isGeoBlockedError } from "@omniroute/open-sse/services/errorClassifier.ts";
+import * as retirement from "@/lib/providers/chatgptWebRetirementResponse";
+import {
+  classifyFailure,
+  isAccountDeactivatedMessage,
+  projectConnectionTestResultForPublicResponse,
+  projectProviderRuntimeForPublicResponse,
+  toSafeMessage,
+} from "./publicErrorBoundary";
 
-// Bound the OAuth probe so a hung upstream can't block the connection-test queue
-// forever (#1449). Mirrors the 30s timeout the API-key path uses via validateProviderApiKey.
+export { classifyFailure, projectProviderRuntimeForPublicResponse } from "./publicErrorBoundary";
+
+// Match the API-key path's 30s timeout so a hung OAuth upstream cannot block the test queue.
 const OAUTH_TEST_TIMEOUT_MS = 30_000;
 
 import { CLI_RUNTIME_PROVIDER_MAP } from "./cliRuntimeProviderMap";
+import { isOperatorDisabled } from "@/lib/providers/operatorDisable";
+import { getRequestPeerLocality } from "@/shared/utils/apiAuth";
 
 /** POST body is optional; when present, only known fields are validated. */
 const providerConnectionTestBodySchema = z.object({
@@ -51,115 +61,6 @@ const providerConnectionTestBodySchema = z.object({
   /** Bypass the 017 debounce for operator-initiated tests. */
   forceRefresh: z.boolean().optional(),
 });
-
-function toSafeMessage(value: any, fallback = "Unknown error"): string {
-  if (typeof value !== "string") return fallback;
-  const trimmed = value.trim();
-  return trimmed || fallback;
-}
-
-/**
- * A provider/account that the upstream has deactivated (vs. a revoked/expired token).
- * #1444: a Codex account can have a perfectly healthy OAuth refresh while its ChatGPT
- * account is deactivated, in which case the API returns 401 — mislabeling that as
- * "Token invalid or revoked" hides the real cause. Mirrors the deactivation phrases the
- * account-fallback classifier already trusts.
- */
-function isAccountDeactivatedMessage(text: string): boolean {
-  const n = (text || "").toLowerCase();
-  return n.includes("account_deactivated") || (n.includes("deactivat") && n.includes("account"));
-}
-
-export function classifyFailure({
-  error,
-  statusCode = null,
-  refreshFailed = false,
-  unsupported = false,
-  provider,
-}: ClassifyFailureArgs) {
-  const message = toSafeMessage(error, "Connection test failed");
-  const normalized = message.toLowerCase();
-  const numericStatus = Number.isFinite(statusCode) ? Number(statusCode) : null;
-
-  if (unsupported) {
-    return makeDiagnosis("unsupported", "validation", message, "unsupported");
-  }
-
-  if (refreshFailed || normalized.includes("refresh failed")) {
-    return makeDiagnosis("token_refresh_failed", "oauth", message, "refresh_failed");
-  }
-
-  // #1444: a deactivated account is distinct from a revoked/expired token — surface it
-  // as account_deactivated (which the dashboard renders as "Account Deactivated") before
-  // the generic 401/403 branch below would mark it "upstream_auth_error".
-  if (isAccountDeactivatedMessage(normalized)) {
-    return makeDiagnosis("account_deactivated", "account", message, "account_deactivated");
-  }
-
-  if (numericStatus === 401 || numericStatus === 403) {
-    return classifyAmbiguousOrAuthError(provider, normalized, message, numericStatus);
-  }
-
-  if (numericStatus === 429) {
-    return makeDiagnosis("upstream_rate_limited", "upstream", message, "429");
-  }
-
-  if (numericStatus && numericStatus >= 500) {
-    return makeDiagnosis("upstream_unavailable", "upstream", message, String(numericStatus));
-  }
-
-  if (normalized.includes("token expired") || normalized.includes("expired")) {
-    return makeDiagnosis("token_expired", "oauth", message, "token_expired");
-  }
-
-  if (
-    normalized.includes("invalid api key") ||
-    normalized.includes("token invalid") ||
-    normalized.includes("revoked") ||
-    normalized.includes("access denied") ||
-    normalized.includes("unauthorized") ||
-    normalized.includes("forbidden")
-  ) {
-    return makeDiagnosis(
-      "upstream_auth_error",
-      "upstream",
-      message,
-      numericStatus ? String(numericStatus) : "auth_failed"
-    );
-  }
-
-  if (
-    normalized.includes("rate limit") ||
-    normalized.includes("quota") ||
-    normalized.includes("too many requests")
-  ) {
-    return makeDiagnosis(
-      "upstream_rate_limited",
-      "upstream",
-      message,
-      numericStatus ? String(numericStatus) : "rate_limited"
-    );
-  }
-
-  if (
-    normalized.includes("fetch failed") ||
-    normalized.includes("network") ||
-    normalized.includes("timeout") ||
-    normalized.includes("timed out") ||
-    normalized.includes("econn") ||
-    normalized.includes("enotfound") ||
-    normalized.includes("socket")
-  ) {
-    return makeDiagnosis("network_error", "upstream", message, "network_error");
-  }
-
-  return makeDiagnosis(
-    "upstream_error",
-    "upstream",
-    message,
-    numericStatus ? String(numericStatus) : "upstream_error"
-  );
-}
 
 function hasQoderToken(connection: any): boolean {
   if (typeof connection?.apiKey === "string" && connection.apiKey.trim().length > 0) return true;
@@ -174,7 +75,17 @@ function hasQoderToken(connection: any): boolean {
   return false;
 }
 
-async function getProviderRuntimeStatus(connection: any) {
+// GHSA-jmq6-8j86-8xqj: getCliRuntimeStatus() spawns on the host (LOCAL_ONLY capability),
+// but these routes stay remote-reachable — only loopback/LAN callers and the scheduler probe.
+export type ConnectionTestOptions = { allowLocalRuntimeProbe?: boolean };
+
+export async function getProviderRuntimeStatus(
+  connection: any,
+  {
+    allowLocalRuntimeProbe = true,
+    probe = getCliRuntimeStatus,
+  }: ConnectionTestOptions & { probe?: typeof getCliRuntimeStatus } = {}
+) {
   const provider = typeof connection?.provider === "string" ? connection.provider : "";
   let toolId = CLI_RUNTIME_PROVIDER_MAP[provider];
 
@@ -201,9 +112,10 @@ async function getProviderRuntimeStatus(connection: any) {
     toolId = null;
   }
   if (!toolId) return null;
+  if (!allowLocalRuntimeProbe) return null;
 
   try {
-    const runtime = await getCliRuntimeStatus(toolId);
+    const runtime = await probe(toolId);
     if (runtime.installed && runtime.runnable) {
       return runtime;
     }
@@ -225,7 +137,10 @@ async function getProviderRuntimeStatus(connection: any) {
       error: runtimeMessage,
     };
   } catch (error) {
-    const runtimeMessage = `Failed to check local CLI runtime: ${(error as any)?.message || "runtime_check_failed"}`;
+    const runtimeMessage = `Failed to check local CLI runtime: ${toSafeMessage(
+      error,
+      "runtime_check_failed"
+    )}`;
     return {
       installed: false,
       runnable: false,
@@ -309,7 +224,10 @@ async function refreshOAuthToken(connection: any) {
     });
     return result; // { accessToken, expiresIn, refreshToken } or null
   } catch (err) {
-    console.error(`Error refreshing ${provider} token:`, (err as any).message);
+    console.error(
+      `Error refreshing ${provider} token:`,
+      toSafeMessage(err, "Token refresh failed")
+    );
     return null;
   }
 }
@@ -337,6 +255,16 @@ function isTokenExpired(connection: any) {
   }
   const buffer = 5 * 60 * 1000; // 5 minutes
   return expiresAt <= Date.now() + buffer;
+}
+
+// #12958: GitLab's own `direct_access` 403 JSON body (e.g. `{"error":"insufficient_scope"}`)
+// is safe operator-facing diagnostic text — it is not a stack trace and does not echo the
+// token — but is capped and stripped of control characters defensively before it reaches
+// the stored/surfaced error message, per docs/security/ERROR_SANITIZATION.md.
+function sanitizeUpstreamBodyText(bodyText: string): string {
+  const collapsed = bodyText.replace(/[\r\n\t\u0000-\u001f]+/g, " ").trim();
+  const MAX_LENGTH = 300;
+  return collapsed.length > MAX_LENGTH ? `${collapsed.slice(0, MAX_LENGTH)}…` : collapsed;
 }
 
 /**
@@ -383,7 +311,10 @@ async function syncToCloudIfEnabled() {
     const machineId = await getConsistentMachineId();
     await syncToCloud(machineId);
   } catch (error) {
-    console.log("Error syncing to cloud after token refresh:", error);
+    console.log(
+      "Error syncing to cloud after token refresh:",
+      toSafeMessage(error, "Cloud sync failed")
+    );
   }
 }
 
@@ -741,9 +672,14 @@ export async function testOAuthConnection(
       };
     }
 
+    // #12958: `res.text()` can only be read once — capture it here in the outer
+    // function scope so the generic bodyText selection below (which used to call
+    // `res.text()` a second time and silently get "" back, discarding the real
+    // GitLab error) can reuse the same string instead of re-reading a drained body.
+    let gitlabDuoDirectAccessBodyText: string | null = null;
     if (connection.provider === "gitlab-duo") {
-      const gitlabText = await res.text();
-      if (shouldFallbackToPublicCodeSuggestions(res.status, gitlabText)) {
+      gitlabDuoDirectAccessBodyText = await res.text();
+      if (shouldFallbackToPublicCodeSuggestions(res.status, gitlabDuoDirectAccessBodyText)) {
         const fallbackOk = await probeGitLabDuoPublicFallback(connection, accessToken, timeoutMs);
         if (fallbackOk) {
           return {
@@ -885,14 +821,47 @@ export async function testOAuthConnection(
     // revoked token. (The body is unread here for non-gitlab providers; the guard keeps
     // it safe if it was already consumed.) antigravity/agy read any failure body so a
     // geo-blocked egress location is labeled with an actionable message instead of a
-    // generic "API returned 400".
+    // generic "API returned 400". gitlab-duo already consumed the body above (`res.text()`
+    // is single-read) — reuse it instead of re-reading a drained stream (#12958).
     const bodyText =
-      res.status === 401 ||
-      res.status === 403 ||
-      connection.provider === "antigravity" ||
-      connection.provider === "agy"
-        ? await res.text().catch(() => "")
-        : "";
+      connection.provider === "gitlab-duo"
+        ? (gitlabDuoDirectAccessBodyText ?? "")
+        : res.status === 401 ||
+            res.status === 403 ||
+            connection.provider === "antigravity" ||
+            connection.provider === "agy"
+          ? await res.text().catch(() => "")
+          : "";
+
+    if (connection.provider === "antigravity" || connection.provider === "agy") {
+      console.log(
+        `[OAuthTest] ${connection.provider} probe returned HTTP ${res.status}:`,
+        bodyText.slice(0, 500)
+      );
+    }
+
+    // #13010: a Cloud Code envelope failure answers with its own JSON `error.message`.
+    // Appending it turns a useless "API returned 400" into the actual upstream reason.
+    // Collapsed/truncated by the same helper the gitlab-duo path uses.
+    let upstreamDetail = "";
+    if (bodyText) {
+      try {
+        const parsed = JSON.parse(bodyText);
+        if (typeof parsed?.error?.message === "string" && parsed.error.message.trim()) {
+          upstreamDetail = `: ${sanitizeUpstreamBodyText(parsed.error.message)}`;
+        }
+      } catch {}
+    }
+
+    // #12958: surface the real upstream body for a gitlab-duo 403 that also fails the
+    // public-fallback probe, instead of a generic "Access denied" — the operator needs
+    // to tell an entitlement/scope failure apart from an instance-config or revoked-token
+    // one. Trimmed/truncated per docs/security/ERROR_SANITIZATION.md (no stack traces are
+    // involved; this is GitLab's own JSON error body, capped defensively).
+    const gitlabDuoAccessDeniedMessage =
+      connection.provider === "gitlab-duo" && res.status === 403
+        ? `Access denied: ${sanitizeUpstreamBodyText(bodyText)}`
+        : "Access denied";
     const error = isGeoBlockedError(bodyText)
       ? "Egress location blocked by Google (User location is not supported). The Cloud Code API is not offered from this server's proxy exit region — route antigravity/agy through a proxy in a supported region (e.g. US/EU) or use a different provider. This is NOT an account problem."
       : isAccountDeactivatedMessage(bodyText)
@@ -900,8 +869,8 @@ export async function testOAuthConnection(
         : res.status === 401
           ? "Token invalid or revoked"
           : res.status === 403
-            ? "Access denied"
-            : `API returned ${res.status}`;
+            ? gitlabDuoAccessDeniedMessage
+            : `API returned ${res.status}${upstreamDetail}`;
 
     return {
       valid: false,
@@ -941,11 +910,13 @@ async function testApiKeyConnection(connection: any) {
     };
   }
 
-  const result = await validateProviderApiKey({
-    provider: connection.provider,
-    apiKey: connection.apiKey,
-    providerSpecificData: connection.providerSpecificData,
-  });
+  const result = projectProviderValidationResultForPublicResponse(
+    await validateProviderApiKey({
+      provider: connection.provider,
+      apiKey: connection.apiKey,
+      providerSpecificData: connection.providerSpecificData,
+    })
+  );
 
   if (result.unsupported) {
     const error = "Provider test not supported";
@@ -971,7 +942,11 @@ async function testApiKeyConnection(connection: any) {
  * @param {string} validationModelId Optional custom model ID to test connection with
  * @returns {Promise<object>} Test result (same shape as the JSON response)
  */
-async function runConnectionTest(connectionId: string, validationModelId?: string) {
+export async function testSingleConnection(
+  connectionId: string,
+  validationModelId?: string,
+  options: ConnectionTestOptions = {}
+) {
   const connection = await getCachedProviderConnectionById(connectionId);
 
   if (!connection) {
@@ -1003,18 +978,21 @@ async function runConnectionTest(connectionId: string, validationModelId?: strin
       latencyMs: 0,
     };
   }
+  retirement.assertProviderAvailable(provider);
 
-  // Resolve proxy for this connection (key → combo → provider → global → direct)
   let proxyInfo: any = null;
   try {
     proxyInfo = await resolveProxyForConnection(connectionId);
-  } catch (proxyErr: any) {
-    console.log(`[ConnectionTest] Failed to resolve proxy for ${connectionId}:`, proxyErr?.message);
+  } catch (proxyErr: unknown) {
+    console.log(
+      `[ConnectionTest] Failed to resolve proxy for ${connectionId}:`,
+      toSafeMessage(proxyErr, "Proxy resolution failed")
+    );
   }
 
   let result;
   const startTime = Date.now();
-  const runtime = await getProviderRuntimeStatus(connection);
+  const runtime = await getProviderRuntimeStatus(connection, options);
 
   // Codex app-server connections carry no validatable OpenAI token (the codex
   // app-server process self-manages its own OAuth). Probe the app-server's
@@ -1065,21 +1043,55 @@ async function runConnectionTest(connectionId: string, validationModelId?: strin
     );
   }
 
+  // Every runtime path converges here before any health-state write, diagnosis,
+  // persistent log, or public response. API-key validation is projected at its
+  // own seam above as well so future refactors cannot move it past this boundary.
+  result = projectConnectionTestResultForPublicResponse(result);
+  const publicRuntime = projectProviderRuntimeForPublicResponse(runtime);
+
   const latencyMs = Date.now() - startTime;
 
-  // Unsupported validation capability is neutral: the probe established that
-  // this provider cannot be verified through the generic test surface, not
-  // that its credential is invalid. Do not mutate persisted credential health.
+  // A representative-model 402 on an openai-compatible / per-model-quota
+  // gateway must lock only that model. The connection stays selectable for
+  // sibling upstreams that still return 200.
+  const connectionPsd = (connection.providerSpecificData as Record<string, unknown> | null) || {};
+  const configuredModelId =
+    typeof connectionPsd.validationModelId === "string" ? connectionPsd.validationModelId : "";
+  const probedModelId = validationModelId || configuredModelId;
+  if (result.valid && result.statusCode === 402 && probedModelId) {
+    lockModelIfPerModelQuota(provider, connectionId, probedModelId, "credits", 60 * 60 * 1000);
+  }
+
+  // Activation/PSD writes use the row as it is NOW (uncached): an operator may have switched the
+  // connection off during the probe, and the pre-probe snapshot would switch it back on.
+  const latest = ((await getProviderConnectionById(connectionId)) ??
+    connection) as typeof connection;
+  const operatorDisabled = isOperatorDisabled(latest);
+
+  // Unsupported validation capability is neutral: the provider cannot be verified through the
+  // generic test surface, which says nothing about its credential. Do not mutate persisted
+  // credential health (testStatus/lastError/etc.) — but DO activate it if it isn't already: under
+  // the "only advertise tested connections" default (connections start isActive:false, see
+  // POST /api/providers) it would stay hidden from /v1/models forever. Operator-disabled stays off.
   if (result.skipped === true) {
+    if (latest.isActive !== true && !operatorDisabled) {
+      try {
+        await updateProviderConnection(connectionId, { isActive: true });
+      } catch (activateError) {
+        console.log(
+          `[ConnectionTest] Failed to activate unverifiable connection ${connectionId}:`,
+          toSafeMessage(activateError, "Connection activation failed")
+        );
+      }
+    }
     return {
       ...result,
       latencyMs,
-      runtime: runtime || null,
+      runtime: publicRuntime,
       testedAt: null,
     };
   }
 
-  // Build update data
   const now = new Date().toISOString();
   const diagnosis =
     result.diagnosis ||
@@ -1090,6 +1102,15 @@ async function runConnectionTest(connectionId: string, validationModelId?: strin
   // #9623: a failed connection test must not paint the connection permanently red.
   // Previously a non-terminal failure wrote `testStatus: "error"` with
   // `rateLimitedUntil: null` — since the cooldown filter only ever skips entries
+  // A representative-model 402 on an openai-compatible / per-model-quota
+  // gateway must lock only that model (#12875). The connection stays
+  // selectable for sibling upstreams that still return 200.
+  const configuredModelId = typeof psd?.validationModelId === "string" ? psd.validationModelId : "";
+  const probedModelId = validationModelId || configuredModelId;
+  if (result.statusCode === 402 && probedModelId) {
+    lockModelIfPerModelQuota(provider, connectionId, probedModelId, "credits", 60 * 60 * 1000);
+  }
+
   // whose rateLimitedUntil is in the future, a null cooldown left the connection
   // permanently unavailable after a transient outage. Give non-terminal test
   // failures a short cooldown so the lazy-recovery path retries them.
@@ -1099,47 +1120,61 @@ async function runConnectionTest(connectionId: string, validationModelId?: strin
     terminalTestStatuses.has(String(diagnosis.code ?? diagnosis.type ?? "").toLowerCase());
   const testFailureCooldownMs = result.valid ? 0 : 30_000; // 30s retry window
 
+  // A successful credential probe proves the KEY is valid. It does NOT prove the
+  // quota window reopened: the probe is a cheap auth/models call that never touches
+  // the chat quota a weekly cap applies to. Clearing an ACTIVE cooldown here — which
+  // the credential-health scheduler triggers for every connection every 300s — put
+  // `zai/glm-5.3` back to `active` / `rate_limited_until = NULL` within 30s of every
+  // restart, so combo dispatched it straight into the same weekly 429. Same rule as
+  // maybeClearRecoveredQuotaState: a future rateLimitedUntil is the 429 handler's
+  // hard statement and no poller may overrule it. Once it elapses, the next probe
+  // clears it normally.
+  const clearErrorState = shouldClearErrorStateOnValidProbe(
+    connection as { rateLimitedUntil?: string | null },
+    result.valid
+  );
+  const lastErrorType = result.valid ? connection.lastErrorType : diagnosis.type;
+
   const updateData: Record<string, any> = {
-    testStatus: result.valid ? "active" : "error",
-    lastError: result.valid ? null : result.error,
-    lastErrorAt: result.valid ? null : now,
+    testStatus: clearErrorState ? "active" : result.valid ? connection.testStatus : "error",
+    // A passing test is the sole activation signal under the "only advertise tested-working
+    // connections" default (POST /api/providers creates connections isActive:false). Only ever
+    // flips ON: a failing test leaves isActive untouched (a transient failure must not take a
+    // working connection out of rotation — the cooldown/rateLimitedUntil below handles that), so
+    // this never deactivates anything, nor re-enables an operator-disabled one.
+    ...(result.valid && !operatorDisabled ? { isActive: true } : {}),
+    lastError: clearErrorState ? null : result.valid ? connection.lastError : result.error,
+    lastErrorAt: clearErrorState ? null : result.valid ? connection.lastErrorAt : now,
     lastTested: now,
-    lastErrorType: result.valid ? null : diagnosis.type,
-    lastErrorSource: result.valid ? null : diagnosis.source,
-    errorCode: result.valid ? null : diagnosis.code || result.statusCode || null,
-    rateLimitedUntil:
-      result.valid || isTerminalFailure
-        ? result.valid
-          ? null
-          : connection.rateLimitedUntil || null
-        : new Date(Date.now() + testFailureCooldownMs).toISOString(),
+    lastErrorType: clearErrorState ? null : lastErrorType,
+    lastErrorSource: clearErrorState
+      ? null
+      : result.valid
+        ? connection.lastErrorSource
+        : diagnosis.source,
+    errorCode: clearErrorState
+      ? null
+      : result.valid
+        ? connection.errorCode
+        : diagnosis.code || result.statusCode || null,
+    rateLimitedUntil: clearErrorState
+      ? null
+      : isTerminalFailure
+        ? connection.rateLimitedUntil || null
+        : result.valid
+          ? connection.rateLimitedUntil || null
+          : new Date(Date.now() + testFailureCooldownMs).toISOString(),
   };
 
-  if (result.valid) {
+  if (clearErrorState) {
     updateData.backoffLevel = 0;
-
-    const psd = connection?.providerSpecificData as Record<string, unknown> | undefined;
-    updateData.providerSpecificData = {
-      ...(psd || {}),
-      apiKeyHealth: {},
-    };
-
-    // A representative-model 402 on an openai-compatible / per-model-quota
-    // gateway must lock only that model (#12875). The connection stays
-    // selectable for sibling upstreams that still return 200.
-    const configuredModelId =
-      typeof psd?.validationModelId === "string" ? psd.validationModelId : "";
-    const probedModelId = validationModelId || configuredModelId;
-    if (result.statusCode === 402 && probedModelId) {
-      lockModelIfPerModelQuota(provider, connectionId, probedModelId, "credits", 60 * 60 * 1000);
-    }
-
-    try {
-      removeConnectionHealth(connectionId);
-    } catch {}
   }
 
-  // If token was refreshed, update tokens in DB
+  if (result.valid && (connection.apiKey || connection.accessToken)) {
+    const recovered = recoverKeyHealth(connectionId, "primary", latest.providerSpecificData);
+    if (recovered) updateData.providerSpecificData = recovered;
+  }
+
   if (result.refreshed && result.newTokens) {
     updateData.accessToken = result.newTokens.accessToken;
     if (result.newTokens.refreshToken) {
@@ -1148,6 +1183,32 @@ async function runConnectionTest(connectionId: string, validationModelId?: strin
     if (result.newTokens.expiresIn) {
       updateData.expiresAt = new Date(Date.now() + result.newTokens.expiresIn * 1000).toISOString();
     }
+  }
+
+  /**
+   * Debounced connection test (017). A dashboard tab left open re-fires the
+   * batch loop every ~300s; within the debounce window the previous completed
+   * result is replayed (debounced: true) with no upstream call, no DB health
+   * mutation, and no call_logs write. The scheduler and the operator's Test
+   * button pass forceRefresh to always run a real probe. Only completed tests
+   * (testedAt set) are cached — early outs like "not found" or a lease deferral
+   * stay uncached.
+   */
+  export async function testSingleConnection(
+    connectionId: string,
+    validationModelId?: string,
+    options?: { forceRefresh?: boolean }
+  ) {
+    const debounce = getSharedConnectionTestDebounce();
+    const cached = debounce.lookup(connectionId, { forceRefresh: options?.forceRefresh });
+    if (cached) {
+      return { ...(cached.result as Record<string, unknown>), debounced: true };
+    }
+    const result = await runConnectionTest(connectionId, validationModelId);
+    if (result && typeof result === "object" && (result as { testedAt?: unknown }).testedAt) {
+      debounce.record(connectionId, result, (result as { valid?: unknown }).valid !== true);
+    }
+    return result;
   }
 
   // Update status in db
@@ -1203,38 +1264,11 @@ async function runConnectionTest(connectionId: string, validationModelId?: strin
     diagnosis,
     latencyMs,
     statusCode: result.statusCode || null,
-    runtime: runtime || null,
+    runtime: publicRuntime,
     testedAt: now,
   };
 }
 
-/**
- * Debounced connection test (017). A dashboard tab left open re-fires the
- * batch loop every ~300s; within the debounce window the previous completed
- * result is replayed (debounced: true) with no upstream call, no DB health
- * mutation, and no call_logs write. The scheduler and the operator's Test
- * button pass forceRefresh to always run a real probe. Only completed tests
- * (testedAt set) are cached — early outs like "not found" or a lease deferral
- * stay uncached.
- */
-export async function testSingleConnection(
-  connectionId: string,
-  validationModelId?: string,
-  options?: { forceRefresh?: boolean }
-) {
-  const debounce = getSharedConnectionTestDebounce();
-  const cached = debounce.lookup(connectionId, { forceRefresh: options?.forceRefresh });
-  if (cached) {
-    return { ...(cached.result as Record<string, unknown>), debounced: true };
-  }
-  const result = await runConnectionTest(connectionId, validationModelId);
-  if (result && typeof result === "object" && (result as { testedAt?: unknown }).testedAt) {
-    debounce.record(connectionId, result, (result as { valid?: unknown }).valid !== true);
-  }
-  return result;
-}
-
-// POST /api/providers/[id]/test - Test connection
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
@@ -1249,9 +1283,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (isValidationFailure(validation)) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
-    const { validationModelId, forceRefresh } = validation.data;
+    const { validationModelId } = validation.data;
 
-    const data = await testSingleConnection(id, validationModelId, { forceRefresh });
+    const data = await testSingleConnection(id, validationModelId, {
+      allowLocalRuntimeProbe: getRequestPeerLocality(request) !== "remote",
+    });
 
     if (data.error === "Connection not found") {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
@@ -1259,7 +1295,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     return NextResponse.json(data);
   } catch (error) {
-    console.log("Error testing connection:", error);
+    const retired = retirement.responseForError(error);
+    if (retired) return retired;
+    console.log("Error testing connection:", toSafeMessage(error, "Connection test failed"));
     return NextResponse.json({ error: "Test failed" }, { status: 500 });
   }
 }

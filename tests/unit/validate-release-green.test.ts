@@ -7,6 +7,7 @@ const mod = await import("../../scripts/quality/validate-release-green.mjs");
 const {
   firstFailureLine,
   eslintCounts,
+  evaluateEslintRun,
   parseEslintJson,
   parseCognitiveCount,
   isDrift,
@@ -17,6 +18,7 @@ const {
   fullCiTimeoutFor,
   curatedEquivalentId,
   fullCiKindFor,
+  ESLINT_TIMEOUT_MS,
 } = mod;
 
 const extract = extractCiGates as (
@@ -48,6 +50,22 @@ test("parseEslintJson tolerates ESLint's trailing unpruned-suppressions stderr s
   assert.deepEqual(parseEslintJson(eslintJsonReport + stderrTail), [
     { filePath: "open-sse/executors/example.ts", errorCount: 0, warningCount: 0, messages: [] },
   ]);
+});
+
+test("evaluateEslintRun preserves an ESLint timeout instead of misreporting invalid JSON", () => {
+  const timedOut = classifyRunError({ killed: true, code: "ETIMEDOUT" }, 30 * 60 * 1000);
+
+  assert.deepEqual(evaluateEslintRun(timedOut, 0), [
+    {
+      id: "lint",
+      label: "ESLint",
+      kind: "hard",
+      ok: false,
+      detail:
+        "gate exceeded its 1800s ceiling and was killed — treat as a hung/failed gate (e.g. an unreleased DB handle in the unit suite); does NOT pass",
+    },
+  ]);
+  assert.equal(ESLINT_TIMEOUT_MS, 60 * 60 * 1000, "cold release lint needs >30m headroom");
 });
 
 test("parseCognitiveCount reads the gate's count (en + pt)", () => {
@@ -259,6 +277,33 @@ test("pre-flight runs tarball boot only after the package artifact builder compl
   );
 });
 
+test("pack gate builds, stamps dist/BUILD_SHA, then validates against the tree under test (#10427)", async () => {
+  const fs = await import("node:fs");
+  const src = fs.readFileSync(
+    new URL("../../scripts/quality/validate-release-green.mjs", import.meta.url),
+    "utf8"
+  );
+  const gate = src.slice(src.indexOf("async function runPackArtifactGate"));
+  assert.ok(gate.length > 0, "the pack gate runner must exist");
+  const buildAt = gate.indexOf('"build:cli"');
+  const stampAt = gate.indexOf("scripts/build/write-build-sha.mjs");
+  const checkAt = gate.indexOf('"check:pack-artifact"');
+  // `build:cli` never writes dist/BUILD_SHA, so a bare `check:pack-artifact` always failed
+  // the provenance guard with "dist/BUILD_SHA is missing" — the same trap ci.yml avoids.
+  assert.ok(buildAt >= 0 && stampAt > buildAt, "BUILD_SHA must be stamped after build:cli");
+  assert.ok(checkAt > stampAt, "the artifact must be validated only after it is stamped");
+  assert.match(
+    gate.slice(checkAt, checkAt + 200),
+    /env: PACK_GATE_ENV/,
+    "a release-branch tip is never an ancestor of origin/main mid-cycle"
+  );
+  assert.match(src, /const PACK_GATE_ENV = \{ OMNIROUTE_RELEASE_REF: "HEAD" \}/);
+  // Both entry points (the parallel wave and --with-build --quick) must use it.
+  assert.equal(src.match(/runPackArtifactGate\b/g)?.length, 3);
+  assert.doesNotMatch(src, /runAsync\(npmCmd, \["run", "check:pack-artifact"\]/);
+  assert.doesNotMatch(src, /id: "pack-artifact",[^}]*args:/);
+});
+
 // ─── --full-ci gate extraction (P0, v3.8.46 post-mortem) ─────────────────────
 
 const CI_FIXTURE = `
@@ -362,6 +407,16 @@ test("extractCiGates: the REAL ci.yml yields the base-reds that leaked in v3.8.4
     assert.ok(ids.has(g), `real ci.yml must expose ${g} to --full-ci`);
   }
   assert.ok(ids.size >= 20, "the real gate set is substantial (>= 20 static gates)");
+});
+
+test("validate-release-green parses workflow YAML via the declared js-yaml dependency", async () => {
+  const fs = await import("node:fs");
+  const src = fs.readFileSync(
+    new URL("../../scripts/quality/validate-release-green.mjs", import.meta.url),
+    "utf8"
+  );
+  assert.match(src, /from ["']js-yaml["']/);
+  assert.doesNotMatch(src, /from ["']yaml["']/);
 });
 
 // ─── Verdict accuracy (review of the #9985 release-green verdict) ────────────

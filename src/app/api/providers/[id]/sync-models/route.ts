@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
-import { getCachedProviderConnectionById } from "@/lib/localDb";
+import { defaultLogger as log } from "@omniroute/open-sse/utils/logger";
+import { getCachedProviderConnectionById } from "@/lib/db/readCache";
 import {
   deleteImportedCustomModels,
   deleteSyncedAvailableModelsForProvider,
   getSyncedAvailableModelsForConnection,
 } from "@/lib/db/models";
 import { selectModelsForImport } from "@/shared/utils/freeModels";
+import { resolveEffectiveAvailableModels } from "@/shared/utils/modelListResolution";
 import {
   importManagedModels,
   type ManagedModelImportMode,
@@ -20,7 +22,13 @@ import {
 } from "@/shared/services/modelSyncScheduler";
 import { autoSyncCodexProfilesFromLiveCatalog } from "@/lib/cli-helper/codexProfileAutoSync";
 import { autoSyncClaudeProfilesFromLiveCatalog } from "@/lib/cli-helper/claudeProfileAutoSync";
+import { getSearchProvider } from "@omniroute/open-sse/config/searchRegistry.ts";
 import { providerUsesCuratedModelsOnly } from "@/lib/providers/modelListingCapability";
+import {
+  fetchVolcPlanModels,
+  providerToVolcPlanKind,
+} from "@/lib/providers/volcenginePlanModelDiscovery";
+import { replaceSyncedAvailableModelsForConnection } from "@/lib/db/models";
 import { GET as getProviderModels } from "../models/route";
 import { isDegradedDiscovery } from "./degradedLocalCatalog";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
@@ -423,7 +431,86 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     logProvider = toNonEmptyString(connection.provider) || "unknown";
     channelLabel = getModelSyncChannelLabel(connection);
-    if (providerUsesCuratedModelsOnly(logProvider)) {
+
+    // Volcano Ark plan providers: discover models live from the console API
+    // (cookie+csrf captured at bind time). The chat API has no /models
+    // endpoint, so the default discovery path below cannot serve them.
+    const volcPlanKind = providerToVolcPlanKind(logProvider);
+    if (volcPlanKind) {
+      const psd =
+        connection.providerSpecificData && typeof connection.providerSpecificData === "object"
+          ? (connection.providerSpecificData as JsonRecord)
+          : {};
+      const cookie = toNonEmptyString(psd.volcConsoleCookie) || "";
+      const csrf = toNonEmptyString(psd.volcCsrfToken) || "";
+      const duration = Date.now() - start;
+      let discovered;
+      try {
+        discovered = await fetchVolcPlanModels(volcPlanKind, cookie, csrf);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        await saveCallLog({
+          method: "POST",
+          path: `/api/providers/${id}/sync-models`,
+          status: 401,
+          model: "model-sync",
+          provider: logProvider,
+          sourceFormat: "-",
+          connectionId: id,
+          duration,
+          error: message,
+          requestType: "model-sync",
+          ...(channelLabel ? { responseBody: { channel: channelLabel } } : {}),
+        }).catch(() => undefined);
+        return NextResponse.json(
+          { error: sanitizeErrorMessage(message) || "Volcano plan discovery failed" },
+          { status: 401 }
+        );
+      }
+      const previous = await getSyncedAvailableModelsForConnection(logProvider, id);
+      const synced = await replaceSyncedAvailableModelsForConnection(logProvider, id, discovered);
+      const prevIds = new Set(previous.map((m) => String(m.id)));
+      const added = synced.filter((m) => !prevIds.has(String(m.id))).length;
+      const removed = previous.filter(
+        (m) => !synced.some((n) => String(n.id) === String(m.id))
+      ).length;
+      await saveCallLog({
+        method: "GET",
+        path: `/api/providers/${id}/models`,
+        status: 200,
+        model: "model-sync",
+        provider: logProvider,
+        sourceFormat: "console-discovery",
+        connectionId: id,
+        duration: Date.now() - start,
+        requestType: "model-sync",
+        responseBody: {
+          source: "volcengine-plan-console-discovery",
+          plan: volcPlanKind,
+          syncedModels: synced.length,
+          added,
+          removed,
+          provider: logProvider,
+          channel: channelLabel,
+          mode,
+        },
+      }).catch(() => undefined);
+      return NextResponse.json({
+        ok: true,
+        provider: logProvider,
+        connectionId: id,
+        source: "volcengine-plan-console-discovery",
+        plan: volcPlanKind,
+        mode,
+        syncedModels: synced.length,
+        availableModelsCount: synced.length,
+        modelChanges: { added, removed, total: added + removed },
+        models: synced,
+      });
+    }
+
+    const isSearchProvider = getSearchProvider(logProvider) !== null;
+    if (providerUsesCuratedModelsOnly(logProvider) || isSearchProvider) {
       const [removedSyncedLists, removedImportedModelIds] = await Promise.all([
         deleteSyncedAvailableModelsForProvider(logProvider),
         deleteImportedCustomModels(logProvider),
@@ -431,8 +518,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       return NextResponse.json({
         provider: logProvider,
         connectionId: id,
-        source: "curated",
-        skipped: "curated-models-only",
+        source: isSearchProvider ? "search" : "curated",
+        skipped: isSearchProvider ? "search-provider" : "curated-models-only",
         syncedModels: 0,
         availableModelsCount: 0,
         models: [],
@@ -548,15 +635,25 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       previousSyncedAvailableModels: previousSyncedAvailableModelsForConnection,
     });
 
-    const effectiveAvailableModels =
-      discoveredModels.length > 0 ? discoveredModels : syncedAvailableModels;
+    const effectiveAvailableModels = resolveEffectiveAvailableModels(
+      freeFilterEmpty,
+      discoveredModels,
+      syncedAvailableModels
+    );
+    if (freeFilterEmpty) {
+      log.warn(
+        "SYNC",
+        `freeFilterEmpty: ${Array.isArray(allFetchedModels) ? allFetchedModels.length : 0} fetched, 0 free — not falling back to stale syncedAvailableModels (${logProvider})`
+      );
+    }
     const modelChanges = summarizeModelChanges(
       previousSyncedAvailableModels,
       effectiveAvailableModels
     );
     const customModelChanges = summarizeModelChanges(previousModels, persistedModels);
-    const syncedModelsCount =
-      effectiveAvailableModels.length > 0
+    const syncedModelsCount = freeFilterEmpty
+      ? 0
+      : effectiveAvailableModels.length > 0
         ? effectiveAvailableModels.length
         : persistedModels.filter((model) => isManagedSyncedModel(model)).length;
     const availableModelsCount = new Set(

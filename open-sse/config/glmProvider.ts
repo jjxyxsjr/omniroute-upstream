@@ -19,6 +19,20 @@ export const GLM_ANTHROPIC_DEFAULT_BASE_URLS = Object.freeze({
 
 export const GLM_SHARED_MODELS = Object.freeze([
   {
+    // GLM-5.3-Flash shares GLM-5.3's OpenAI-compatible Coding Plan surface,
+    // including 1M context, 128K max output, native vision input, and
+    // low|high|max reasoning_effort with max as the documented default.
+    // https://docs.z.ai/guides/llm/glm-5.3-flash
+    id: "glm-5.3-flash",
+    name: "GLM 5.3 Flash",
+    contextLength: 1000000,
+    maxOutputTokens: 131072,
+    toolCalling: true,
+    supportsReasoning: true,
+    supportedThinkingEfforts: ["low", "high", "max"],
+    supportsVision: true,
+  },
+  {
     // GLM-5.3 exposes low|high|max reasoning_effort (default max); -high/-low
     // are OmniRoute aliases resolved by GlmExecutor::parseGlmEffortTier.
     // https://docs.z.ai/guides/llm/glm-5.3
@@ -49,18 +63,44 @@ export const GLM_SHARED_MODELS = Object.freeze([
     supportedThinkingEfforts: ["low"],
   },
   {
-    // GLM-5.3-Flash (2026-08-26): native-multimodal variant — vision
-    // (image/video/file) with thinking that CANNOT be disabled (thinking.type
-    // only "enabled"); text params match GLM-5.3 over a 1M context window,
-    // including the 128K (=131072) max output.
-    // https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash
-    id: "glm-5.3-flash",
-    name: "GLM 5.3 Flash",
+    // Explicit alias for the upstream default (max) — pins reasoning_effort so
+    // the tier survives an upstream default change, and mirrors glm-5.2-max UX.
+    id: "glm-5.3-max",
+    name: "GLM 5.3 Max",
     contextLength: 1000000,
     maxOutputTokens: 131072,
     toolCalling: true,
     supportsReasoning: true,
-    supportedThinkingEfforts: ["low", "high", "max"],
+    supportedThinkingEfforts: ["max"],
+  },
+  {
+    id: "glm-5.3-flash-high",
+    name: "GLM 5.3 Flash High",
+    contextLength: 1000000,
+    maxOutputTokens: 131072,
+    toolCalling: true,
+    supportsReasoning: true,
+    supportedThinkingEfforts: ["high"],
+    supportsVision: true,
+  },
+  {
+    id: "glm-5.3-flash-low",
+    name: "GLM 5.3 Flash Low",
+    contextLength: 1000000,
+    maxOutputTokens: 131072,
+    toolCalling: true,
+    supportsReasoning: true,
+    supportedThinkingEfforts: ["low"],
+    supportsVision: true,
+  },
+  {
+    id: "glm-5.3-flash-max",
+    name: "GLM 5.3 Flash Max",
+    contextLength: 1000000,
+    maxOutputTokens: 131072,
+    toolCalling: true,
+    supportsReasoning: true,
+    supportedThinkingEfforts: ["max"],
     supportsVision: true,
   },
   {
@@ -215,6 +255,7 @@ export const GLMT_REQUEST_DEFAULTS = Object.freeze({
 });
 
 export const GLM_COUNT_TOKENS_TIMEOUT_MS = 3_000;
+/** Module-load snapshot. Wire UA uses getClaudeCodeUserAgent("sdk-cli"). */
 export const GLM_CLAUDE_CODE_USER_AGENT = getClaudeCodeUserAgent("sdk-cli");
 export const GLM_ANTHROPIC_BETA = [
   "claude-code-20250219",
@@ -339,6 +380,41 @@ export function buildGlmQuotaFetch(
     Accept: "application/json",
   };
 
+  if (teamConfig.state === "configured") {
+    headers["bigmodel-organization"] = teamConfig.organizationId;
+    headers["bigmodel-project"] = teamConfig.projectId;
+  }
+
+  return { url, headers };
+}
+
+/**
+ * Coding Plan Reset Card endpoints, mirroring GLM_QUOTA_URLS. `/list` reports the cards
+ * banked on the key, `/use` redeems one. Same Bearer credential as the quota route.
+ */
+export const GLM_RESET_CARD_URLS = Object.freeze({
+  international: "https://api.z.ai/api/biz/customer-package-reset",
+  china: "https://open.bigmodel.cn/api/biz/customer-package-reset",
+});
+
+export type GlmResetCardAction = "list" | "use";
+
+export function buildGlmResetCardFetch(
+  apiKey: string,
+  providerSpecificData: unknown,
+  action: GlmResetCardAction
+): { url: string; headers: Record<string, string> } {
+  const base = GLM_RESET_CARD_URLS[getGlmApiRegion(providerSpecificData)];
+  const url = action === "list" ? `${base}/list?targetType=PERSONAL` : `${base}/use`;
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+    Accept: "application/json",
+    ...(action === "use" ? { "Content-Type": "application/json" } : {}),
+  };
+
+  // Team-plan keys carry the same org/project routing headers as the quota fetch.
+  const teamConfig = getGlmTeamQuotaConfig(providerSpecificData);
   if (teamConfig.state === "configured") {
     headers["bigmodel-organization"] = teamConfig.organizationId;
     headers["bigmodel-project"] = teamConfig.projectId;
@@ -573,7 +649,7 @@ export function buildGlmBaseHeaders(apiKey: string, stream = true): Record<strin
     "anthropic-version": ANTHROPIC_VERSION_HEADER,
     "anthropic-beta": GLM_ANTHROPIC_BETA,
     "anthropic-dangerous-direct-browser-access": "true",
-    "User-Agent": GLM_CLAUDE_CODE_USER_AGENT,
+    "User-Agent": getClaudeCodeUserAgent("sdk-cli"),
     "X-Stainless-Lang": "js",
     "X-Stainless-Runtime": "node",
     "X-Stainless-Retry-Count": "0",
