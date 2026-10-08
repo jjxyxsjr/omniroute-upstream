@@ -536,6 +536,27 @@ export async function dispatchWithCooldownRetry(opts: {
               earliestLockReadyAtMs == null ? readyAt : Math.min(earliestLockReadyAtMs, readyAt);
           }
         }
+        // nnd.30 (#89): every target skipped by the caller-injected availability
+        // pre-check (executeTargetGates `isModelAvailable` skip) is the same
+        // blocked-pool shape — transient unavailability before execution. Without
+        // a lock on the map this used to fall through to the bare 503 below.
+        // No wall-clock recovery moment exists for this shape — go straight to
+        // the honest 429 without parking.
+        const availabilityBlocked = earliestLockReadyAtMs == null && deps.isModelAvailable != null;
+        if (availabilityBlocked) {
+          const blockedStatus = resolveBlockedPoolStatus();
+          finalizeComboTrace(deps.traceInvocationId, state.orderedTargets);
+          finishComboTrace(deps.traceInvocationId, { status: blockedStatus });
+          return errorResponseWithComboDiagnostics(
+            blockedStatus,
+            "Service temporarily unavailable: all targets were skipped by pre-dispatch filters",
+            buildComboDiag(state, deps.traceInvocationId, "all_targets_skipped"),
+            {
+              code: "ALL_TARGETS_SKIPPED",
+              type: blockedStatus === 429 ? "rate_limit_error" : "service_unavailable",
+            }
+          );
+        }
         if (earliestLockReadyAtMs != null) {
           const gateDecision = await poolGate.parkFor(earliestLockReadyAtMs);
           if (gateDecision === "redispatch") {
