@@ -921,8 +921,12 @@ export class DefaultExecutor extends BaseExecutor {
     // while the gateway consumes SSE — STREAM_EARLY_EOF (2026-09-16 trial catch).
     // Idempotent when no forcing is active: executor stream then equals the
     // client stream the translator already emitted.
+    // nnd.31: gate on targetFormat too — detectFormat's max_tokens heuristic
+    // misfires "claude" on plain openai bodies (e.g. the azure param test), and
+    // the strip only matters when the outbound wire is actually claude-shaped.
     if (
       requestFormat === "claude" &&
+      targetFormat === "claude" &&
       typeof withDefaults === "object" &&
       withDefaults !== null &&
       !Array.isArray(withDefaults)

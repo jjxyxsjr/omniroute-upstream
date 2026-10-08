@@ -541,8 +541,12 @@ export async function dispatchWithCooldownRetry(opts: {
         // blocked-pool shape — transient unavailability before execution. Without
         // a lock on the map this used to fall through to the bare 503 below.
         // No wall-clock recovery moment exists for this shape — go straight to
-        // the honest 429 without parking.
-        const availabilityBlocked = earliestLockReadyAtMs == null && deps.isModelAvailable != null;
+        // the honest 429 without parking. Breaker-open pools keep their
+        // dedicated 503 path below (it names the providers + next probe).
+        const availabilityBlocked =
+          earliestLockReadyAtMs == null &&
+          deps.isModelAvailable != null &&
+          !state.skippedForCircuitOpen;
         if (availabilityBlocked) {
           const blockedStatus = resolveBlockedPoolStatus();
           finalizeComboTrace(deps.traceInvocationId, state.orderedTargets);

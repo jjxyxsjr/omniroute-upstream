@@ -437,7 +437,11 @@ test("transient streaming failure still records a configured model lockout", asy
   });
 
   assert.equal(result.status, 502);
-  assert.notEqual(getModelLockoutInfo("codex", connectionId, model), null);
+  // nnd.19: a streaming quality-rejected 502 is OUR stream judgement, not an
+  // upstream HTTP status — locking on it fanned one soft failure into minutes
+  // of ALL_TARGETS_SKIPPED (2026-09-07 storm). Default is NO lockout; opt back
+  // in via settings.modelLockout.qualityFailureLockout.
+  assert.equal(getModelLockoutInfo("codex", connectionId, model), null);
 });
 
 test("protected pre-content streaming quality rejection retries the same target once without advancing", async () => {

@@ -123,7 +123,11 @@ test("a pool not entirely behind open breakers keeps the generic ALL_TARGETS_SKI
   const calls: string[] = [];
 
   const res = await run(calls);
-  assert.equal(res.status, 503);
+  // nnd.30 blocked-pool contract: a mixed pool whose non-breaker targets sit in
+  // model lockouts (600s — past the 10s park cap) exits with rate-limit
+  // semantics (429 + ALL_TARGETS_SKIPPED + Retry-After) instead of a bare 503
+  // that invites client hammering.
+  assert.equal(res.status, 429);
   assert.deepEqual(calls, []);
   const body = (await res.json()) as { error: { code?: string } };
   assert.equal(body.error.code, "ALL_TARGETS_SKIPPED");
