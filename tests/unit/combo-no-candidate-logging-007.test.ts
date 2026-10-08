@@ -85,7 +85,7 @@ test("round-robin 503 emits COMBO_NO_CANDIDATE_RR warn with combo name (007-a2)"
   assert.equal(extra?.combo, "nc-log-rr-007");
 });
 
-test("strategy path 503 emits COMBO_NO_CANDIDATE warn with combo name (007-a2)", async () => {
+test("strategy path blocked-pool exit emits COMBO_NO_CANDIDATE warn with combo name (007-a2)", async () => {
   const { log, warnings } = createCapturingLog();
   const { handleSingleModel, isModelAvailable } = unavailableEverything();
 
@@ -102,7 +102,10 @@ test("strategy path 503 emits COMBO_NO_CANDIDATE warn with combo name (007-a2)",
     log,
   } as Parameters<typeof handleComboChat>[0]);
 
-  assert.equal(result.status, 503);
+  // nnd.30 (161): the strategy path's all-skipped exit is blocked-pool
+  // semantics — default 429 (OMNIROUTE_BLOCKED_POOL_STATUS=503 restores the
+  // hot anchor). The round-robin path above still asserts its legacy 503.
+  assert.equal(result.status, 429);
   const hit = warnings.find((w) => w.tag === "COMBO_NO_CANDIDATE");
   assert.ok(hit, `expected COMBO_NO_CANDIDATE warn, got: ${JSON.stringify(warnings)}`);
   const extra = hit.extra as { combo?: string } | undefined;

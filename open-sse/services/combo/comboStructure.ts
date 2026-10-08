@@ -658,7 +658,10 @@ function isNearBoundaryOverrideReject(
 // clamped to the model's registered cap by the request translators (see
 // claude-to-openai / openai-to-claude), so it must not hard-drop a target that
 // can serve the clamped request. It stays a (soft) compatibility signal.
-const HARD_COMPAT_REASONS = new Set(["tools", "vision", "structured_output", "output_tokens"]);
+// 011 (nnd.12): output_tokens left this set — an oversized max_tokens is now
+// clamped by the translator (#54 learned caps) instead of hard-dropping the
+// target, so a fat max_tokens request keeps its fallback ladder.
+const HARD_COMPAT_REASONS = new Set(["tools", "vision", "structured_output"]);
 
 /**
  * #8332: vision is a hard requirement, not a soft preference — a target whose vision

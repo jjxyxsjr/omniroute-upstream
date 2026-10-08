@@ -244,7 +244,7 @@ test("chatCore converts Responses-style SSE fallback into JSON when stream=false
   const payload = (await result.response.json()) as any;
 
   assert.equal(result.success, true);
-  assert.equal(call.headers.Accept || call.headers.accept, "application/json");
+  assert.equal(call.headers.Accept || call.headers.accept, "text/event-stream"); // nnd #80 forced upstream streaming
   assert.equal(payload.object, "chat.completion");
   assert.equal(payload.choices[0].message.content, "Brasilia");
   assert.ok(payload.usage.total_tokens >= 7);
@@ -305,7 +305,7 @@ test("chatCore converts Responses-style NDJSON fallback into JSON when stream=fa
   const payload = (await result.response.json()) as any;
 
   assert.equal(result.success, true);
-  assert.equal(call.headers.Accept || call.headers.accept, "application/json");
+  assert.equal(call.headers.Accept || call.headers.accept, "text/event-stream"); // nnd #80 forced upstream streaming
   assert.equal(payload.object, "chat.completion");
   assert.equal(payload.choices[0].message.content, "Brasilia");
   assert.ok(payload.usage.total_tokens >= 7);

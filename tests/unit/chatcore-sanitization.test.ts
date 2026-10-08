@@ -615,10 +615,14 @@ test("chatCore resolves stream mode from body.stream and Accept header", async (
     body: { model: "gpt-4o-mini", messages: [{ role: "user", content: "hello" }] },
   });
 
+  // nnd #80: upstream streaming is forced by default (headers arrive early;
+  // the non-streaming branch drains the SSE back into JSON), so a stream:false
+  // request still carries the SSE Accept outbound. The client-facing response
+  // remains JSON.
   assert.equal(explicitTrue.call.headers.Accept, "text/event-stream");
-  assert.equal(explicitFalse.call.headers.Accept, "application/json");
+  assert.equal(explicitFalse.call.headers.Accept, "text/event-stream");
   assert.equal(acceptDriven.call.headers.Accept, "text/event-stream");
-  assert.equal(jsonDefault.call.headers.Accept, "application/json");
+  assert.equal(jsonDefault.call.headers.Accept, "text/event-stream");
 });
 
 test("chatCore treats Nextcloud OpenAI integration requests as non-streaming by default", async () => {
@@ -633,7 +637,9 @@ test("chatCore treats Nextcloud OpenAI integration requests as non-streaming by 
     body: { model: "gpt-4o-mini", stream: true, messages: [{ role: "user", content: "hello" }] },
   });
 
-  assert.equal(nextcloudDefault.call.headers.Accept, "application/json");
+  // nnd #80: forced upstream streaming sends SSE Accept outbound even for a
+  // JSON-defaulted client; the client still receives JSON (drain-and-convert).
+  assert.equal(nextcloudDefault.call.headers.Accept, "text/event-stream");
   assert.equal(nextcloudDefault.result.response.headers.get("content-type"), "application/json");
   assert.equal(nextcloudExplicitStream.call.headers.Accept, "text/event-stream");
 });
@@ -652,7 +658,9 @@ test("chatCore honors API key JSON stream-default compatibility mode", async () 
     body: { model: "gpt-4o-mini", messages: [{ role: "user", content: "hello" }] },
   });
 
-  assert.equal(jsonCompatibleDefault.call.headers.Accept, "application/json");
+  // nnd #80: forced upstream streaming sends SSE Accept outbound even for a
+  // JSON-defaulted key; the client still receives JSON (drain-and-convert).
+  assert.equal(jsonCompatibleDefault.call.headers.Accept, "text/event-stream");
   assert.equal(
     jsonCompatibleDefault.result.response.headers.get("content-type"),
     "application/json"

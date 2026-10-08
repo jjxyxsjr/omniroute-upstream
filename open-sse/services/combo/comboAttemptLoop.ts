@@ -537,30 +537,9 @@ export async function dispatchWithCooldownRetry(opts: {
           }
         }
         // nnd.30 (#89): every target skipped by the caller-injected availability
-        // pre-check (executeTargetGates `isModelAvailable` skip) is the same
-        // blocked-pool shape — transient unavailability before execution. Without
-        // a lock on the map this used to fall through to the bare 503 below.
-        // No wall-clock recovery moment exists for this shape — go straight to
-        // the honest 429 without parking. Breaker-open pools keep their
-        // dedicated 503 path below (it names the providers + next probe).
-        const availabilityBlocked =
-          earliestLockReadyAtMs == null &&
-          deps.isModelAvailable != null &&
-          !state.skippedForCircuitOpen;
-        if (availabilityBlocked) {
-          const blockedStatus = resolveBlockedPoolStatus();
-          finalizeComboTrace(deps.traceInvocationId, state.orderedTargets);
-          finishComboTrace(deps.traceInvocationId, { status: blockedStatus });
-          return errorResponseWithComboDiagnostics(
-            blockedStatus,
-            "Service temporarily unavailable: all targets were skipped by pre-dispatch filters",
-            buildComboDiag(state, deps.traceInvocationId, "all_targets_skipped"),
-            {
-              code: "ALL_TARGETS_SKIPPED",
-              type: blockedStatus === 429 ? "rate_limit_error" : "service_unavailable",
-            }
-          );
-        }
+        // pre-check falls through to the unified blocked-pool exit below (default
+        // 429 via resolveBlockedPoolStatus); only pools with in-memory model locks
+        // park here first.
         if (earliestLockReadyAtMs != null) {
           const gateDecision = await poolGate.parkFor(earliestLockReadyAtMs);
           if (gateDecision === "redispatch") {
@@ -648,9 +627,14 @@ export async function dispatchWithCooldownRetry(opts: {
           const retryHuman = skippedRateLimitedUntil
             ? formatRetryAfter(toRetryAfterDisplayValue(skippedRateLimitedUntil))
             : "";
+          // nnd.30 (#161): blocked-pool exit is rate-limit semantics by default
+          // (429; OMNIROUTE_BLOCKED_POOL_STATUS=503 restores the hot anchor),
+          // regardless of whether a concrete reset moment is known — a bare 503
+          // invited stock SDKs to hard-retry into the saturated pool.
+          const blockedPoolStatus = resolveBlockedPoolStatus();
           return withQuotaExhaustionClassification(
             errorResponseWithComboDiagnostics(
-              skippedRateLimitedUntil ? 429 : 503,
+              blockedPoolStatus,
               [
                 quotaSkip
                   ? `Service temporarily unavailable: all targets were skipped by pre-dispatch filters (${quotaSkip})`
@@ -662,7 +646,7 @@ export async function dispatchWithCooldownRetry(opts: {
               buildComboDiag(state, deps.traceInvocationId, "all_targets_skipped"),
               {
                 code: "ALL_TARGETS_SKIPPED",
-                type: skippedRateLimitedUntil ? "rate_limit_error" : "service_unavailable",
+                type: blockedPoolStatus === 429 ? "rate_limit_error" : "service_unavailable",
                 retryAfter: skippedRateLimitedUntil,
               }
             ),

@@ -151,7 +151,7 @@ test("text-only request: targets are untouched by the vision filter", () => {
   assert.equal(out.length, 1);
 });
 
-test("large output request: unknown maxOutputTokens does not filter a target", () => {
+test("large output request: oversized max_tokens never hard-drops a target (011)", () => {
   const out = filterTargetsByRequestCompatibility(
     [target("openai-compatible-local/custom-large-output-model"), target("openai/gpt-4o-mini")],
     { messages: [{ role: "user", content: "hello" }], max_tokens: 32000 },
@@ -159,5 +159,11 @@ test("large output request: unknown maxOutputTokens does not filter a target", (
   );
   const ids = out.map((t) => t.modelStr);
 
-  assert.deepEqual(ids, ["openai-compatible-local/custom-large-output-model"]);
+  // 011 (nnd.12): output_tokens left the hard-compat set — the translator
+  // clamps oversized max_tokens (#54 learned caps) instead of dropping the
+  // target, preserving the fallback ladder.
+  assert.deepEqual(ids, [
+    "openai-compatible-local/custom-large-output-model",
+    "openai/gpt-4o-mini",
+  ]);
 });

@@ -328,7 +328,10 @@ test("successful response includes both providerRequest and providerResponse in 
     undefined,
     "providerRequest headers must not include upstream response server header"
   );
-  assert.equal(detail.pipelinePayloads.providerRequest.headers.Accept, "application/json");
+  // nnd #80: upstream streaming is forced by default even for non-stream
+  // clients (headers arrive early, the drain-and-convert path rebuilds JSON),
+  // so the outbound request carries the SSE Accept.
+  assert.equal(detail.pipelinePayloads.providerRequest.headers.Accept, "text/event-stream");
   assert.equal(detail.pipelinePayloads.providerRequest.headers["Content-Type"], "application/json");
   assert.equal(detail.pipelinePayloads.providerRequest.headers.Authorization, "[REDACTED]");
 });
