@@ -3187,9 +3187,6 @@ export function createSSEStream(options: StreamOptions = {}) {
                 status: 200,
                 usage: state?.usage,
                 responseBody,
-                ttft: timing.ttftMs(),
-                itlMs: timing.avgItlMs(),
-                interrupted: timing.interrupted,
                 ...timing.completionTiming(),
                 reasoningMeta: reasoningObserver.take(),
                 // Same OPENAI_RESPONSES carve-out as the passthrough branch above —

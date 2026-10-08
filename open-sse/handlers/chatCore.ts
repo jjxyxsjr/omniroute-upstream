@@ -593,7 +593,6 @@ async function handleChatCoreInner({
   // 在 providerFailure 里捕获）。落 call_logs.error_raw_head——error_summary 截断
   // +还原形失真是 max_tokens \u003c 案误诊两天的双重根源。
   let errorRawHead: string | undefined;
-  let upstreamFirstContentAt: number | null = null;
   // Per-request trace id + checkpoint helper. Lets us see exactly which await
   // a hung request was sitting on in `[STAGE_TRACE]` log lines. Uses crypto RNG
   // (not Math.random) purely to satisfy CodeQL js/insecure-randomness — this id
@@ -6006,9 +6005,6 @@ async function handleChatCoreInner({
     };
   }
   providerResponse = streamReadiness.response;
-  if (streamReadiness.firstContentEventAt !== undefined) {
-    upstreamFirstContentAt = streamReadiness.firstContentEventAt;
-  }
 
   // Flush-empty retry (opt-in `FLUSH_EMPTY_RETRY_ENABLED`, default off): when the
   // upstream turn carries no usable content (reasoning-only 200, or a
@@ -6129,15 +6125,6 @@ async function handleChatCoreInner({
       if (streamFailureCompletionRecorded) return;
       streamFailureCompletionRecorded = true;
     }
-    // 2g-a rework: nnd.11's ttft (first client forward − transform start) was a
-    // buffer-replay delta (p50=2ms in production) because ensureStreamReadiness
-    // had already drained and replayed the first upstream chunks. The real TTFT
-    // is first-upstream-content − dispatch; fall back to the old value only for
-    // bypass executors whose streams never went through the readiness gate.
-    const effectiveTtft =
-      upstreamFirstContentAt !== null && upstreamDispatchedAt !== null
-        ? Math.max(0, upstreamFirstContentAt - upstreamDispatchedAt)
-        : ttft;
     const cacheUsageLogMeta = buildCacheUsageLogMeta(streamUsage);
     const streamConnectionId = getCurrentConnectionId();
 
@@ -6229,7 +6216,7 @@ async function handleChatCoreInner({
       model,
       streamStatus: normalizedStreamStatus,
       startTime,
-      ttft: effectiveTtft,
+      ttft,
       streamErrorCode,
       connectionId: streamConnectionId,
       apiKeyInfo,
@@ -6249,8 +6236,8 @@ async function handleChatCoreInner({
         strategy: isCombo ? (comboStrategy ?? "combo") : "direct",
         latencyMs: Date.now() - startTime,
         ttftMs:
-          typeof effectiveTtft === "number" && Number.isFinite(effectiveTtft) && effectiveTtft >= 0
-            ? effectiveTtft
+          typeof ttft === "number" && Number.isFinite(ttft) && ttft >= 0
+            ? ttft
             : null,
         itlMs:
           typeof streamItlMs === "number" && Number.isFinite(streamItlMs) && streamItlMs >= 0
@@ -6303,8 +6290,8 @@ async function handleChatCoreInner({
       // 2g: first-token latency lands in call_logs.ttft_ms for streaming rows
       // (non-stream rows stay null — duration already covers them end-to-end).
       ttftMs:
-        typeof effectiveTtft === "number" && Number.isFinite(effectiveTtft) && effectiveTtft >= 0
-          ? effectiveTtft
+        typeof ttft === "number" && Number.isFinite(ttft) && ttft >= 0
+          ? ttft
           : null,
       // #13130: persist TTFT so call_logs.ttft_ms lets the dashboard compute
       // generation-time TPS instead of wall-clock TPS.

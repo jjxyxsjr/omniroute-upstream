@@ -1732,7 +1732,11 @@ async function handleSingleModelChat(
   // re-attempt to exactly one for the whole request. Declared outside both retry
   // loops so it can never reset and loop.
   let streamEarlyEofRetries = 0;
+  // 8b (nnd.12): per-request counter for the same-connection readiness retry.
   let streamReadinessTimeoutRetries = 0;
+  // 8b (nnd.12): per-request counter bounding the readiness-timeout connection
+  // switch to exactly one. Same "declared outside the loops" discipline.
+  let streamReadinessSwitchRetries = 0;
   // STREAM_EARLY_EOF_SIBLING_FAILOVER_ENABLED: at most ONE sibling hop per request. Keeps the
   // original early-EOF 502 so an exhausted sibling pool surfaces it verbatim (combo detection).
   let earlyEofOriginal: Response | null = null;
@@ -2260,8 +2264,11 @@ async function handleSingleModelChat(
         // markAccountUnavailable, no cooldown) but switch to a DIFFERENT
         // connection once, transparently for the client. Quota-share combos
         // rotate accounts in this same loop, so single-target combos benefit
-        // too. A second hang surfaces the retryable 504 below.
+        // too. A second hang surfaces the retry-504 below.
+        // nnd.31 merge: on the non-combo path the upstream same-connection retry
+        // above already spent the one recovery, so don't fire as a second retry.
         if (
+          (isCombo || streamReadinessTimeoutRetries === 0) &&
           shouldSwitchConnectionOnStreamReadinessTimeout(
             result.errorType,
             result.errorCode,
