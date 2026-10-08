@@ -205,7 +205,15 @@ export function extractImageParts(messages: RequestMessage[]): ImagePart[] {
       imageUrl: p.ref,
       imageType:
         p.shape === "image_base64" ? "image" : p.shape === "image_source_url" ? "url" : "image_url",
-      ...(p.nested ? { path: p.path } : {}),
+      ...(p.nested
+        ? {
+            path: p.path,
+            // nnd.31: the last path segment is the position inside the
+            // tool_result content array (the extract↔replace contract expects
+            // innerIndex, not just the raw walk path).
+            innerIndex: p.path[p.path.length - 1] as number,
+          }
+        : {}),
     }));
 }
 
