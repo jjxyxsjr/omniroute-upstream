@@ -1,6 +1,6 @@
 # OmniRoute 生产运维指南（nnd fork）
 
-> 本仓是 diegosouzapw/OmniRoute 的生产 fork（编号至 nnd.30，nnd.2 镜像曾构建但从未上线——生产 nnd.1→nnd.3，实发 29 代，见 060 8-25/8-26 条；补丁 #1-#90 在册，#90 错峰生产禁用——GLM 七账号窗同步是操作员故意设计）。
+> 本仓是 diegosouzapw/OmniRoute 的生产 fork（编号至 nnd.31=上游 v3.8.51 合并批，2026-10-08 上线；nnd.2 镜像曾构建但从未上线——生产 nnd.1→nnd.3，实发 30 代；补丁 #1-#90 在册 + 51 合并批收编/重放清单见 155 §十九；#90 错峰生产禁用——GLM 七账号窗同步是操作员故意设计）。
 > 上游的代码贡献规范见 `UPSTREAM-GUIDE.md`（拉上游更新时参考）。
 
 ## 仓库拓扑（本仓实际结构）
@@ -13,11 +13,11 @@
 
 ## 生产线
 
-- 生产 VPS：172.16.90.229（容器 `omniroute`，端口 20128；**当前版本以 `docker ps` 实测为准**，2026-09-22 00:01 起 nnd.30，回滚锚 nnd.29）
-- 发版镜像：`omniroute:v3.8.50-nnd.N`（229 本地构建）
+- 生产 VPS：172.16.90.229（容器 `omniroute`，端口 20128；**当前版本以 `docker ps` 实测为准**，2026-10-08 20:01 起 nnd.31=上游 v3.8.51，回滚锚 nnd.30）
+- 发版镜像：`omniroute:v3.8.50-nnd.N`（229 本地构建；上游大版本合并后需 `--build-arg OMNIROUTE_BUILD_MEMORY_MB=14336`，默认 6G 堆会 OOM）
 - 补丁台账：`deploy/docs/155-source-fork-patches.md`
 - 生产台账：`deploy/docs/060-production.md`（每笔操作必记）
-- 上游合并预案：`deploy/docs/156-upstream-51-merge-study.md`（51 批挂起中：上游 tip 不可构建）
+- 上游合并 SOP：`deploy/skills/omniroute-dev/upstream-merge-sop.md`（**大版本合并必读**，nnd.31 实战定型；预案研究档=156）
 
 ## Skill 体系（4 个）
 
@@ -43,9 +43,9 @@
 ## 拉上游更新
 
 ```bash
-git fetch upstream
-git merge upstream/release/vX.Y.Z
-# AGENTS.md 会冲突 → `git checkout --ours AGENTS.md`（保留我们的版本）
+git fetch origin            # ⚠️ 远端名是 origin（无 upstream 远端）
+# 小版本：git merge origin/release/vX.Y.Z，AGENTS.md 冲突 → `git checkout --ours AGENTS.md`
+# 大版本（>5000 文件）：必读 deploy/skills/omniroute-dev/upstream-merge-sop.md，勿逐块手工解
 ```
 
 ## 详细文档
