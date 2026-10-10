@@ -16,6 +16,19 @@ const isBuildPhase =
 const DATA_DIR = resolveDataDir({ isCloud });
 
 export const CALL_LOGS_DIR = isCloud ? null : path.join(DATA_DIR, "call_logs");
+// #91: the cap used to be a hardcoded 512KB with no override. Claude-Code-style
+// clients resend the whole session every turn, so the heaviest requests sail
+// past it every time and the size-limit fallback replaced BOTH bodies with a
+// single OMITTED marker — the rows where triage most needs the exchange
+// (long agentic sessions are also where the exotic failures live) were left
+// with zero diagnostic material. Default stays 512KB for upstream parity;
+// OMNIROUTE_CALL_LOG_ARTIFACT_MAX_KB raises it without a rebuild (capped at
+// 16MB so a typo cannot silently turn call_logs into a disk-eater), and the
+// messages-tail stage below keeps the newest turns even when the cap trips.
+function getMaxCallLogArtifactBytes(): number {
+  const kb = Number.parseInt(process.env.OMNIROUTE_CALL_LOG_ARTIFACT_MAX_KB ?? "", 10);
+  return Number.isFinite(kb) && kb > 0 ? Math.min(kb, 16 * 1024) * 1024 : MAX_CALL_LOG_ARTIFACT_BYTES;
+}
 export const MAX_CALL_LOG_ARTIFACT_BYTES = 512 * 1024;
 
 // Re-exported for backward compatibility: consumers (completedRequestDetails.ts)
@@ -173,26 +186,82 @@ export function getArtifactMaxBytesForTest(artifact: CallLogArtifact): number {
 }
 
 function getArtifactMaxBytes(artifact: CallLogArtifact): number {
-  return artifact.pipeline ? getCallLogPipelineMaxSizeBytes() : MAX_CALL_LOG_ARTIFACT_BYTES;
+  return artifact.pipeline
+    ? getCallLogPipelineMaxSizeBytes()
+    : getMaxCallLogArtifactBytes();
 }
 
-function buildMinimalArtifactForSizeLimit(artifact: CallLogArtifact) {
+// #91: messages-tail retention for oversized chat bodies. Claude-Code-style
+// clients resend the full session every turn, so a >512KB body means "a long
+// conversation", not "a pathological prompt". The omission stages would drop
+// the entire exchange; instead keep the newest N messages (each individually
+// shrunk to a byte budget) so the last turns of the exchange — the part a
+// triaging engineer needs — survive. Head items are replaced by a marker
+// object on messages[0] — the same convention truncateForLog uses for arrays.
+const TAIL_MESSAGES_MAX = 20;
+const TAIL_MESSAGE_TEXT_BYTES = 8 * 1024;
+
+function shrinkStringTail(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  const marker = "\n[truncated: call log size limit]";
+  const budget = maxBytes - Buffer.byteLength(marker, "utf8");
+  // Byte-slice from the tail, then trim a possibly split multi-byte sequence.
+  const sliced = Buffer.from(text, "utf8").subarray(-budget).toString("utf8");
+  const cleanStart = sliced.indexOf(sliced.trimStart()[0] ?? "");
+  return `${sliced.slice(cleanStart >= 0 ? cleanStart : 0)}${marker}`;
+}
+
+function shrinkMessageContentPart(part: unknown): unknown {
+  if (part && typeof part === "object" && "text" in part && typeof (part as { text: unknown }).text === "string") {
+    return { ...(part as object), text: shrinkStringTail((part as { text: string }).text, TAIL_MESSAGE_TEXT_BYTES) };
+  }
+  return part;
+}
+
+function shrinkMessage(message: unknown): unknown {
+  if (!message || typeof message !== "object") return message;
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return { ...(message as object), content: shrinkStringTail(content, TAIL_MESSAGE_TEXT_BYTES) };
+  }
+  if (Array.isArray(content)) {
+    return { ...(message as object), content: content.map(shrinkMessageContentPart) };
+  }
+  return message;
+}
+
+function buildMessagesTailArtifactForSizeLimit(artifact: CallLogArtifact) {
+  const body = artifact.requestBody;
+  const messages =
+    body && typeof body === "object" && Array.isArray((body as { messages?: unknown }).messages)
+      ? (body as { messages: unknown[] }).messages
+      : null;
+  if (!messages?.length) return null;
+
+  const tail = messages.slice(-TAIL_MESSAGES_MAX).map(shrinkMessage);
+  const requestBody: Record<string, unknown> = {
+    ...(body as Record<string, unknown>),
+    messages: tail,
+  };
+  if (messages.length > tail.length) {
+    // Length-only marker object on the first retained slot, matching the
+    // `_omniroute_truncated_array` convention readers already look for.
+    requestBody.messages = [
+      { _omniroute_truncated_array: true, originalLength: messages.length },
+      ...tail,
+    ];
+  }
+
   return {
-    schemaVersion: artifact.schemaVersion,
-    summary: artifact.summary,
-    requestBody: OMITTED_FOR_SIZE_LIMIT,
-    responseBody: OMITTED_FOR_SIZE_LIMIT,
-    // Never drop the error: it is the only field that says WHY the request
-    // failed (e.g. "Fetch timeout after 110000ms on https://..."). Diagnosing
-    // provider outages from a log row that shows only an omission marker is
-    // impossible; the error string is tiny next to the request/response bodies.
+    ...omitOversizedPipeline(artifact),
+    requestBody,
+    // The response of a long-session turn is small next to the request; give it
+    // the same tail treatment only if it is itself a string that trips the cap.
+    responseBody:
+      typeof artifact.responseBody === "string"
+        ? shrinkStringTail(artifact.responseBody, TAIL_MESSAGE_TEXT_BYTES * 2)
+        : artifact.responseBody,
     error: preserveErrorForSizeLimit(artifact.error),
-    pipeline: {
-      error: {
-        _omniroute_truncated: true,
-        reason: SIZE_LIMIT_EXCEEDED_REASON,
-      },
-    },
   };
 }
 
@@ -220,6 +289,26 @@ function buildMinimalArtifactForSizeLimit(artifact: CallLogArtifact) {
  * `maybeEnrichCompletedDetail` (usage/completedRequestDetails.ts) reads
  * `pipeline.providerResponse` in preference to `responseBody`.
  */
+function buildMinimalArtifactForSizeLimit(artifact: CallLogArtifact) {
+  return {
+    schemaVersion: artifact.schemaVersion,
+    summary: artifact.summary,
+    requestBody: OMITTED_FOR_SIZE_LIMIT,
+    responseBody: OMITTED_FOR_SIZE_LIMIT,
+    // Never drop the error: it is the only field that says WHY the request
+    // failed (e.g. "Fetch timeout after 110000ms on https://..."). Diagnosing
+    // provider outages from a log row that shows only an omission marker is
+    // impossible; the error string is tiny next to the request/response bodies.
+    error: preserveErrorForSizeLimit(artifact.error),
+    pipeline: {
+      error: {
+        _omniroute_truncated: true,
+        reason: SIZE_LIMIT_EXCEEDED_REASON,
+      },
+    },
+  };
+}
+
 function buildSizeLimitStages(artifact: CallLogArtifact): Array<() => unknown> {
   // One parametrized helper for both body-omission stages: request-only keeps
   // the response verbatim, both-bodies drops it too. Single spread + single
@@ -244,6 +333,10 @@ function buildSizeLimitStages(artifact: CallLogArtifact): Array<() => unknown> {
     // below, so it is left out rather than costing a redundant stringify.
     ...(artifact.pipeline ? [() => omitBodies(artifact)] : []),
     () => omitOversizedPipeline(artifact),
+    // #91: before giving up on the bodies entirely, try keeping the newest
+    // messages of a chat body. Long Claude-Code sessions were the shape that
+    // made the omission stages lose whole conversations.
+    () => buildMessagesTailArtifactForSizeLimit(artifact) ?? omitOversizedPipeline(artifact),
     () => omitBodies(omitOversizedPipeline(artifact)),
     // The summary alone exceeded the cap (pathological). Keep the error so the
     // row stays diagnosable, drop everything else including the summary body.
