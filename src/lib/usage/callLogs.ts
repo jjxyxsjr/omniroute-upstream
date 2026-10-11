@@ -726,6 +726,13 @@ async function saveCallLogOperation(entry: any): Promise<void> {
         entry.queueWaitMs >= 0
           ? Math.round(entry.queueWaitMs)
           : null,
+      // nnd.34 #93 (157 §六-1): wire-form error head, pre-JSON.parse — escape
+      // forms preserved verbatim. error_summary truncation + restoration
+      // distortion root cure (max_tokens \u003c case).
+      errorRawHead:
+        typeof entry.errorRawHead === "string" && entry.errorRawHead.length > 0
+          ? entry.errorRawHead.slice(0, 512)
+          : null,
       tokensIn: toNumber(getLoggedInputTokens(entry.tokens)),
       tokensOut: toNumber(getLoggedOutputTokens(entry.tokens)),
       tokensCacheRead: getPromptCacheReadTokensOrNull(entry.tokens),
@@ -821,7 +828,7 @@ async function saveCallLogOperation(entry: any): Promise<void> {
         combo_name, combo_step_id, combo_execution_key, error_summary, detail_state,
         artifact_relpath, artifact_size_bytes, artifact_sha256,
         has_request_body, has_response_body, has_pipeline_details, request_summary,
-        correlation_id, model_pinned, session_tag, response_id, error_type,
+        correlation_id, model_pinned, session_tag, response_id, error_type, error_raw_head,
         video_content_removed, has_content, usage_provenance,
         added_wait_ms, added_wait_cause${resilienceCol}
       )
@@ -836,7 +843,7 @@ async function saveCallLogOperation(entry: any): Promise<void> {
         @comboName, @comboStepId, @comboExecutionKey, @errorSummary, @detailState,
         @artifactRelPath, @artifactSizeBytes, @artifactSha256,
         @hasRequestBody, @hasResponseBody, @hasPipelineDetails, @requestSummary,
-        @correlationId, @modelPinned, @sessionTag, @responseId, @errorType,
+        @correlationId, @modelPinned, @sessionTag, @responseId, @errorType, @errorRawHead,
         @videoContentRemoved, @hasContent, @usageProvenance,
         @addedWaitMs, @addedWaitCause${resilienceParam}
       )

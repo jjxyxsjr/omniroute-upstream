@@ -321,6 +321,13 @@ export type PersistAttemptLogsContext = {
    * reports queueing without threading the value through each one.
    */
   getQueueWaitMs?: () => number | null;
+  /**
+   * nnd.34 #93 (deploy/docs/157 §六-1): lazily-read wire-form head of the
+   * error response (first 512 chars, escape forms preserved — captured in
+   * providerFailure before any JSON.parse restoration). undefined for
+   * successful requests. Persisted to call_logs.error_raw_head.
+   */
+  getErrorRawHead?: () => string | undefined;
 };
 
 function toConnectionId(value: unknown): string | null {
@@ -445,6 +452,7 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
     noLogEnabled,
     correlationId,
     getQueueWaitMs,
+    getErrorRawHead,
     modelPinned,
     sessionTag,
     videoBridgeLogRedaction,
@@ -590,6 +598,16 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
     connectionId: finalConnectionId || undefined,
     duration: Date.now() - startTime,
     ttftMs: typeof ttft === "number" && Number.isFinite(ttft) && ttft >= 0 ? ttft : null,
+    // 2g-a: the nnd.31 rebuild dropped this entry-level field (only the
+    // streamChunks copy survived), silencing queue_wait_ms for three days —
+    // restored (#94). Lazily read so every error exit reports it too.
+    queueWaitMs: nonNegativeMs(getQueueWaitMs?.()),
+    // nnd.34 #93 (157 §六-1): wire-form error head, pre-JSON.parse — lazily
+    // read so every error exit persists it without threading values through.
+    errorRawHead: (() => {
+      const h = getErrorRawHead?.();
+      return typeof h === "string" && h.length > 0 ? h : null;
+    })(),
     tokens: tokens || {},
     // Estimated-token flag, computed here where tokens still carry the marker
     // (it does not survive spreads or JSON round-trips to the sink).
