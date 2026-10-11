@@ -87,6 +87,65 @@ test("the tail-retained artifact fits the size budget on disk", () => {
   assert.ok(size <= 512 * 1024, `artifact must stay under the cap, got ${size}`);
 });
 
+// An agentic body where the newest human input sits far from the end: a long
+// tool-result train follows it, and earlier conversation history precedes it.
+// This is the production shape #92 measured on >400KB sessions (42% carry
+// their last human input >60 messages back).
+function agenticBody(toolTurns: number, perTurnBytes: number) {
+  const turns: Array<{ role: string; content: unknown }> = [];
+  // Older conversation history before the newest human input.
+  for (let i = 0; i < 20; i++) {
+    turns.push({ role: "user", content: `旧历史轮 ${i}` });
+    turns.push({ role: "assistant", content: "ok" });
+  }
+  turns.push({ role: "user", content: [{ type: "text", text: "这是最重要的一条真人输入 end-human" }] });
+  // Each tool turn = tool_result + assistant ack = 2 messages, so the human
+  // input ends up `toolTurns * 2` messages from the end.
+  for (let i = 0; i < toolTurns; i++) {
+    turns.push({
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: `t${i}`, content: "x".repeat(perTurnBytes) }],
+    });
+    turns.push({ role: "assistant", content: "ok" });
+  }
+  return { model: "glm-5.3", stream: true, messages: turns };
+}
+
+test("window extends back to the newest human input when tools trail it (#92)", () => {
+  // Newest human input is 100 messages from the end (50 tool turns trailing).
+  const body = agenticBody(50, 16 * 1024); // ~800KB of tool results behind it
+  const stored = roundTrip(artifact(body));
+
+  const req = stored.requestBody as Record<string, unknown>;
+  assert.notEqual(stored.requestBody, OMITTED);
+  const messages = req.messages as Array<Record<string, unknown>>;
+  const serialized = JSON.stringify(messages);
+  assert.ok(serialized.includes("end-human"), "the newest human input survives the window");
+  assert.ok(
+    serialized.includes("truncated: call log size limit"),
+    "tool-result turns inside the window are shrunk to the small budget"
+  );
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(stored.requestBody)) <= 512 * 1024,
+    "extended window still fits the cap"
+  );
+});
+
+test("hunt is capped: a human input beyond 150 messages back stays dropped", () => {
+  // 100 tool turns = 200 messages of trailing tools: the input sits 200 back.
+  const body = agenticBody(100, 16 * 1024);
+  const stored = roundTrip(artifact(body));
+
+  const req = stored.requestBody as Record<string, unknown>;
+  assert.notEqual(stored.requestBody, OMITTED);
+  const serialized = JSON.stringify(req.messages);
+  assert.ok(!serialized.includes("end-human"), "beyond the hunt cap the old input stays dropped");
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(stored.requestBody)) <= 512 * 1024,
+    "capped window fits the budget"
+  );
+});
+
 test("bodies without a messages array keep the old minimal-omitted behavior", () => {
   // Non-chat body (string) that trips the cap on its own — the pre-#91 shape.
   const stored = roundTrip(artifact("y".repeat(900 * 1024)));

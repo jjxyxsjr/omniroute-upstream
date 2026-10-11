@@ -198,8 +198,18 @@ function getArtifactMaxBytes(artifact: CallLogArtifact): number {
 // shrunk to a byte budget) so the last turns of the exchange — the part a
 // triaging engineer needs — survive. Head items are replaced by a marker
 // object on messages[0] — the same convention truncateForLog uses for arrays.
+// #92: a fixed 20-message window misses the newest human turn in real agentic
+// traffic — measured on production, 42% of >400KB sessions carry their last
+// human input >60 messages from the end (agent tool-call trains run long).
+// The window now extends backwards from the tail until the newest
+// non-tool-result user message is included (capped), and tool-result turns
+// inside the window get a much smaller byte budget than human-authored text
+// (measured p50 0.7KB / p90 6.8KB vs 1KB/24KB) so the extension stays inside
+// the same 512KB artifact cap.
 const TAIL_MESSAGES_MAX = 20;
+const TAIL_MESSAGES_HUNT_LIMIT = 150;
 const TAIL_MESSAGE_TEXT_BYTES = 8 * 1024;
+const TAIL_TOOL_RESULT_TEXT_BYTES = 256;
 
 function shrinkStringTail(text: string, maxBytes: number): string {
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
@@ -211,21 +221,51 @@ function shrinkStringTail(text: string, maxBytes: number): string {
   return `${sliced.slice(cleanStart >= 0 ? cleanStart : 0)}${marker}`;
 }
 
-function shrinkMessageContentPart(part: unknown): unknown {
-  if (part && typeof part === "object" && "text" in part && typeof (part as { text: unknown }).text === "string") {
-    return { ...(part as object), text: shrinkStringTail((part as { text: string }).text, TAIL_MESSAGE_TEXT_BYTES) };
+// A user-role message that only carries tool output (tool_result parts or the
+// Trae-style wrapper) is machine-generated context, not a human turn.
+function isToolResultOnlyUserMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") return false;
+  const content = (message as { content?: unknown }).content;
+  const s = JSON.stringify(content ?? "");
+  return content !== undefined && (s.includes('"tool_result"') || s.includes("<toolcall_result>") || s.includes("<toolcall_status>"));
+}
+
+// The newest human-authored user message index, searched from the tail.
+function findLastHumanInputIndex(messages: unknown[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i] as { role?: string } | null;
+    if (!m || m.role !== "user") continue;
+    if (isToolResultOnlyUserMessage(m)) continue;
+    return i;
+  }
+  return -1;
+}
+
+function shrinkMessageContentPart(part: unknown, textBudget: number): unknown {
+  if (!part || typeof part !== "object") return part;
+  const record = part as { text?: unknown; content?: unknown };
+  // tool_result parts carry their payload in `content` (string or parts[]),
+  // text parts in `text` — shrink whichever is a big string.
+  if (typeof record.text === "string") {
+    return { ...record, text: shrinkStringTail(record.text, textBudget) };
+  }
+  if (typeof record.content === "string") {
+    return { ...record, content: shrinkStringTail(record.content, textBudget) };
+  }
+  if (Array.isArray(record.content)) {
+    return { ...record, content: record.content.map((p) => shrinkMessageContentPart(p, textBudget)) };
   }
   return part;
 }
 
-function shrinkMessage(message: unknown): unknown {
+function shrinkMessage(message: unknown, textBudget = TAIL_MESSAGE_TEXT_BYTES): unknown {
   if (!message || typeof message !== "object") return message;
   const content = (message as { content?: unknown }).content;
   if (typeof content === "string") {
-    return { ...(message as object), content: shrinkStringTail(content, TAIL_MESSAGE_TEXT_BYTES) };
+    return { ...(message as object), content: shrinkStringTail(content, textBudget) };
   }
   if (Array.isArray(content)) {
-    return { ...(message as object), content: content.map(shrinkMessageContentPart) };
+    return { ...(message as object), content: content.map((p) => shrinkMessageContentPart(p, textBudget)) };
   }
   return message;
 }
@@ -238,12 +278,24 @@ function buildMessagesTailArtifactForSizeLimit(artifact: CallLogArtifact) {
       : null;
   if (!messages?.length) return null;
 
-  const tail = messages.slice(-TAIL_MESSAGES_MAX).map(shrinkMessage);
+  // #92: window = last TAIL_MESSAGES_MAX turns, extended backwards until the
+  // newest human input is inside it (or the hunt limit is hit). Tool-result
+  // turns inside the window get the small budget — they are bulk, machine-
+  // generated context; human turns keep the full-text budget.
+  const lastHumanIdx = findLastHumanInputIndex(messages);
+  let start = Math.max(0, messages.length - TAIL_MESSAGES_MAX);
+  if (lastHumanIdx >= 0) {
+    start = Math.min(start, Math.max(0, lastHumanIdx - 2));
+    start = Math.max(start, messages.length - TAIL_MESSAGES_HUNT_LIMIT);
+  }
+  const tail = messages.slice(start).map((m) =>
+    shrinkMessage(m, isToolResultOnlyUserMessage(m) ? TAIL_TOOL_RESULT_TEXT_BYTES : TAIL_MESSAGE_TEXT_BYTES)
+  );
   const requestBody: Record<string, unknown> = {
     ...(body as Record<string, unknown>),
     messages: tail,
   };
-  if (messages.length > tail.length) {
+  if (start > 0) {
     // Length-only marker object on the first retained slot, matching the
     // `_omniroute_truncated_array` convention readers already look for.
     requestBody.messages = [
