@@ -131,6 +131,31 @@ test("window extends back to the newest human input when tools trail it (#92)", 
   );
 });
 
+test("translated bodies: tool_result flattened to text parts is still machine context (#92)", () => {
+  // The gateway pipeline flattens tool_result parts into plain text parts
+  // before the artifact is written — the log never sees the native shape.
+  const turns: Array<{ role: string; content: unknown }> = [];
+  for (let i = 0; i < 20; i++) {
+    turns.push({ role: "user", content: `旧历史轮 ${i}` });
+    turns.push({ role: "assistant", content: "ok" });
+  }
+  turns.push({ role: "user", content: [{ type: "text", text: "真人最新的指令 end-human-T" }] });
+  for (let i = 0; i < 50; i++) {
+    turns.push({ role: "user", content: [{ type: "text", text: "x".repeat(16 * 1024) }] });
+    turns.push({ role: "assistant", content: "ok" });
+  }
+  const stored = roundTrip(artifact({ model: "glm-5.3", stream: true, messages: turns }));
+
+  const req = stored.requestBody as Record<string, unknown>;
+  assert.notEqual(stored.requestBody, OMITTED);
+  const serialized = JSON.stringify(req.messages);
+  assert.ok(serialized.includes("end-human-T"), "human input survives when trailing turns are translated text");
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(stored.requestBody)) <= 512 * 1024,
+    "translated bulk turns are budgeted as machine context"
+  );
+});
+
 test("hunt is capped: a human input beyond 150 messages back stays dropped", () => {
   // 100 tool turns = 200 messages of trailing tools: the input sits 200 back.
   const body = agenticBody(100, 16 * 1024);

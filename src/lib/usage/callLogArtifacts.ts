@@ -221,13 +221,28 @@ function shrinkStringTail(text: string, maxBytes: number): string {
   return `${sliced.slice(cleanStart >= 0 ? cleanStart : 0)}${marker}`;
 }
 
-// A user-role message that only carries tool output (tool_result parts or the
-// Trae-style wrapper) is machine-generated context, not a human turn.
+// A user-role message that only carries machine-generated context — not a
+// human turn. Two shapes: native tool_result parts, and the gateway-translated
+// form where the pipeline has already flattened tool_result parts into plain
+// text parts (what lands in call_logs is the translated intermediate, not the
+// client's original). A >2KB user turn is bulk context by the measured
+// distribution (human inputs: p50 1KB / p90 24KB, and the p90 tail is mostly
+// pasted documents, not typing) — treat it as machine context for budgeting.
+const MACHINE_CONTEXT_TURN_BYTES = 2 * 1024;
+
 function isToolResultOnlyUserMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") return false;
   const content = (message as { content?: unknown }).content;
-  const s = JSON.stringify(content ?? "");
-  return content !== undefined && (s.includes('"tool_result"') || s.includes("<toolcall_result>") || s.includes("<toolcall_status>"));
+  if (content === undefined) return false;
+  const s = JSON.stringify(content);
+  if (s.includes('"tool_result"') || s.includes("<toolcall_result>") || s.includes("<toolcall_status>")) return true;
+  if (!s.includes('"tool_result"')) {
+    // Translated form: text-only parts whose payload dwarfs human typing.
+    const parts = Array.isArray(content) ? content : [content];
+    const textOnly = parts.every((p) => !p || typeof p !== "object" || (p as { type?: string }).type === "text");
+    if (textOnly && Buffer.byteLength(s, "utf8") > MACHINE_CONTEXT_TURN_BYTES) return true;
+  }
+  return false;
 }
 
 // The newest human-authored user message index, searched from the tail.
