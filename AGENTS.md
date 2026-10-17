@@ -1,6 +1,6 @@
 # OmniRoute 生产运维指南（nnd fork）
 
-> 本仓是 diegosouzapw/OmniRoute 的生产 fork（编号至 nnd.34=观测保真持久化批，2026-10-11 上线；nnd.2 镜像曾构建但从未上线——生产 nnd.1→nnd.3，实发 33 代；补丁 #1-#94 在册（#93/94=error_raw_head 持久化链+queue_wait_ms 回归修复，见 155 §二十二）+ 51 合并批收编/重放清单见 155 §十九；#90 错峰生产禁用——GLM 七账号窗同步是操作员故意设计）。
+> 本仓是 diegosouzapw/OmniRoute 的生产 fork（编号至 nnd.34=观测保真持久化批——**10-11 20:14 真实上线、10-14 凌晨 env 重建时被静默回退至 nnd.33**（2026-10-17 审计以 DB 行为证据定案：迁移 200 于 10-11 20:14:49 应用、10-12/13 queue_wait_ms 覆盖 96.6%/97.5%、10-14 起归零；详见 060 2026-10-17 条），是否切回待操作员定调；nnd.2 镜像曾构建但从未上线——生产 nnd.1→nnd.3，实发 33 代；补丁 #1-#94 在册（#93/94=error_raw_head 持久化链+queue_wait_ms 回归修复，见 155 §二十二）+ 51 合并批收编/重放清单见 155 §十九；#90 错峰生产禁用——GLM 七账号窗同步是操作员故意设计）。
 > 上游的代码贡献规范见 `UPSTREAM-GUIDE.md`（拉上游更新时参考）。
 
 ## 仓库拓扑（本仓实际结构）
@@ -13,7 +13,7 @@
 
 ## 生产线
 
-- 生产 VPS：172.16.90.229（容器 `omniroute`，端口 20128；**当前版本以 `docker ps` 实测为准**，2026-10-11 20:14 起 nnd.34（上游 v3.8.51 基线），回滚锚 nnd.33）
+- 生产 VPS：172.16.90.229（容器 `omniroute`，端口 20128；**当前版本以 `docker ps` 实测为准**——2026-10-17 定调：nnd.34 曾上线（10-11→10-14，共 2.5 天），10-14 凌晨与版本无关的 env 重建未带现役 tag 被静默回退，**现役与回滚锚=nnd.33**（上游 v3.8.51 基线），nnd.34 镜像保留待定调切回）
 - 发版镜像：`omniroute:v3.8.51-nnd.N`（229 本地构建；⚠️ tag 前缀随上游基线版本走——nnd.31/32 曾沿用旧模板打成 v3.8.50-nnd.N 后重打，大合并后构建命令的 tag 前缀必须同步改；上游大版本合并后需 `--build-arg OMNIROUTE_BUILD_MEMORY_MB=14336`，默认 6G 堆会 OOM）
 - 补丁台账：`deploy/docs/155-source-fork-patches.md`
 - 生产台账：`deploy/docs/060-production.md`（每笔操作必记）
@@ -56,6 +56,6 @@ git fetch origin            # ⚠️ 远端名是 origin（无 upstream 远端�
 
 ## 二开审计工具
 
-- **全量清单**：`bash skills/omniroute-dev/scripts/fork-manifest.sh` — 所有改动文件 × 哪些补丁碰的
-- **单文件审计**：`bash skills/omniroute-dev/scripts/fork-manifest.sh <file>` — 该文件被哪些补丁改过 + 与上游的完整 diff
-- **上游影响检查**：`bash skills/omniroute-dev/scripts/upstream-impact.sh` — 拉上游前跑，看会不会打到我们改过的文件（冲突预警）
+- **全量清单**：`bash deploy/skills/omniroute-dev/scripts/fork-manifest.sh` — 所有改动文件 × 哪些补丁碰的（⚠️ 51 大合并后全量模式基线口径失真——会把上游合并计入改动面且逐文件模式在大规模下不可用，以 155 台账为准）
+- **单文件审计**：`bash deploy/skills/omniroute-dev/scripts/fork-manifest.sh <file>` — 该文件被哪些补丁改过 + 与上游的完整 diff
+- **上游影响检查**：`bash deploy/skills/omniroute-dev/scripts/upstream-impact.sh` — 拉上游前跑，看会不会打到我们改过的文件（冲突预警；⚠️ 须显式传参指定新上游区间——NEW 默认值 origin/release/v3.8.51 是已并入基线，裸跑输出纯噪音）
