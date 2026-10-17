@@ -5,7 +5,11 @@ const DEFAULT_APP_LOG_RETENTION_DAYS = 7;
 const DEFAULT_CALL_LOG_RETENTION_DAYS = 7;
 const DEFAULT_APP_LOG_MAX_SIZE = 50 * 1024 * 1024;
 const DEFAULT_APP_LOG_MAX_FILES = 20;
-const DEFAULT_CALL_LOG_MAX_ENTRIES = 10000;
+// nnd.35 #100: 70000 ≈ 7 days × ~10k rows/day observed in production
+// (deep-hunt P0-5). The old 10000 default made the overflow cleaner evict
+// artifact files after ~1 day while the table rows live 7 days — the
+// replayable window and the row window must cover the same span.
+const DEFAULT_CALL_LOG_MAX_ENTRIES = 70000;
 const DEFAULT_CALL_LOGS_TABLE_MAX_ROWS = 100000;
 const DEFAULT_CALL_LOG_PIPELINE_MAX_SIZE_KB = 512;
 const DEFAULT_PROXY_LOGS_TABLE_MAX_ROWS = 100000;

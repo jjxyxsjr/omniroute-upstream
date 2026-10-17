@@ -546,8 +546,15 @@ export class GlmExecutor extends DefaultExecutor {
             url,
             fetchOpts as RequestInit,
             fetch,
+            // nnd.35 #96: bind the body (fetchOpts.body is the serialized
+            // transformedBody) so the floor carries #88 volume tiers +
+            // reasoning-effort awareness — the bare call flat-45s'ed large
+            // cold prefills the inner two-segment logic would allow.
             resolveNonStreamTotalBudgetMs(
-              resolveDirectHeadersTimeoutMs(),
+              resolveDirectHeadersTimeoutMs(
+                process.env,
+                typeof fetchOpts.body === "string" ? fetchOpts.body : null
+              ),
               STREAM_READINESS_MAX_TIMEOUT_MS
             )
           );

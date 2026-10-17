@@ -27,7 +27,9 @@ export const CALL_LOGS_DIR = isCloud ? null : path.join(DATA_DIR, "call_logs");
 // messages-tail stage below keeps the newest turns even when the cap trips.
 function getMaxCallLogArtifactBytes(): number {
   const kb = Number.parseInt(process.env.OMNIROUTE_CALL_LOG_ARTIFACT_MAX_KB ?? "", 10);
-  return Number.isFinite(kb) && kb > 0 ? Math.min(kb, 16 * 1024) * 1024 : MAX_CALL_LOG_ARTIFACT_BYTES;
+  return Number.isFinite(kb) && kb > 0
+    ? Math.min(kb, 16 * 1024) * 1024
+    : MAX_CALL_LOG_ARTIFACT_BYTES;
 }
 export const MAX_CALL_LOG_ARTIFACT_BYTES = 512 * 1024;
 
@@ -186,9 +188,7 @@ export function getArtifactMaxBytesForTest(artifact: CallLogArtifact): number {
 }
 
 function getArtifactMaxBytes(artifact: CallLogArtifact): number {
-  return artifact.pipeline
-    ? getCallLogPipelineMaxSizeBytes()
-    : getMaxCallLogArtifactBytes();
+  return artifact.pipeline ? getCallLogPipelineMaxSizeBytes() : getMaxCallLogArtifactBytes();
 }
 
 // #91: messages-tail retention for oversized chat bodies. Claude-Code-style
@@ -235,11 +235,26 @@ function isToolResultOnlyUserMessage(message: unknown): boolean {
   const content = (message as { content?: unknown }).content;
   if (content === undefined) return false;
   const s = JSON.stringify(content);
-  if (s.includes('"tool_result"') || s.includes("<toolcall_result>") || s.includes("<toolcall_status>")) return true;
-  if (!s.includes('"tool_result"')) {
+  // nnd.35 #101: match markers that actually EXIST in the pipeline — the #92
+  // spelling (<toolcall_result>/<toolcall_status>) has zero producers in this
+  // repo (deep-hunt T1-F4), so sub-2KB translated tool turns fell through to
+  // the human-input branch. Real markers: <tool_result> (kimiToolCallNarration
+  // / cursor narration), the "Tool result (" line form, and tool_use_id for
+  // flattened native shapes.
+  if (
+    s.includes('"tool_result"') ||
+    s.includes('"tool_use_id"') ||
+    s.includes("<tool_result>") ||
+    s.includes("Tool result (")
+  ) {
+    return true;
+  }
+  {
     // Translated form: text-only parts whose payload dwarfs human typing.
     const parts = Array.isArray(content) ? content : [content];
-    const textOnly = parts.every((p) => !p || typeof p !== "object" || (p as { type?: string }).type === "text");
+    const textOnly = parts.every(
+      (p) => !p || typeof p !== "object" || (p as { type?: string }).type === "text"
+    );
     if (textOnly && Buffer.byteLength(s, "utf8") > MACHINE_CONTEXT_TURN_BYTES) return true;
   }
   return false;
@@ -268,7 +283,10 @@ function shrinkMessageContentPart(part: unknown, textBudget: number): unknown {
     return { ...record, content: shrinkStringTail(record.content, textBudget) };
   }
   if (Array.isArray(record.content)) {
-    return { ...record, content: record.content.map((p) => shrinkMessageContentPart(p, textBudget)) };
+    return {
+      ...record,
+      content: record.content.map((p) => shrinkMessageContentPart(p, textBudget)),
+    };
   }
   return part;
 }
@@ -280,7 +298,10 @@ function shrinkMessage(message: unknown, textBudget = TAIL_MESSAGE_TEXT_BYTES): 
     return { ...(message as object), content: shrinkStringTail(content, textBudget) };
   }
   if (Array.isArray(content)) {
-    return { ...(message as object), content: content.map((p) => shrinkMessageContentPart(p, textBudget)) };
+    return {
+      ...(message as object),
+      content: content.map((p) => shrinkMessageContentPart(p, textBudget)),
+    };
   }
   return message;
 }
@@ -303,9 +324,14 @@ function buildMessagesTailArtifactForSizeLimit(artifact: CallLogArtifact) {
     start = Math.min(start, Math.max(0, lastHumanIdx - 2));
     start = Math.max(start, messages.length - TAIL_MESSAGES_HUNT_LIMIT);
   }
-  const tail = messages.slice(start).map((m) =>
-    shrinkMessage(m, isToolResultOnlyUserMessage(m) ? TAIL_TOOL_RESULT_TEXT_BYTES : TAIL_MESSAGE_TEXT_BYTES)
-  );
+  const tail = messages
+    .slice(start)
+    .map((m) =>
+      shrinkMessage(
+        m,
+        isToolResultOnlyUserMessage(m) ? TAIL_TOOL_RESULT_TEXT_BYTES : TAIL_MESSAGE_TEXT_BYTES
+      )
+    );
   const requestBody: Record<string, unknown> = {
     ...(body as Record<string, unknown>),
     messages: tail,
@@ -383,7 +409,9 @@ function buildSizeLimitStages(artifact: CallLogArtifact): Array<() => unknown> {
   const omitBodies = <T extends object>(value: T, keepResponse = false) => ({
     ...value,
     requestBody: OMITTED_FOR_SIZE_LIMIT,
-    responseBody: keepResponse ? (value as { responseBody: unknown }).responseBody : OMITTED_FOR_SIZE_LIMIT,
+    responseBody: keepResponse
+      ? (value as { responseBody: unknown }).responseBody
+      : OMITTED_FOR_SIZE_LIMIT,
     error: preserveErrorForSizeLimit(artifact.error),
   });
 

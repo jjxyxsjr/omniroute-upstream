@@ -956,10 +956,14 @@ export class BaseExecutor {
         // nnd.4-2: an explicit registry/config cap wins; otherwise the cap is
         // the fetch-layer two-segment budget (our source of truth — the 110s
         // default otherwise outer-kills a direct path allowed 120s).
+        // nnd.35 #96: pass the serialized body so the floor carries #88's
+        // volume-aware tier and reasoning-effort awareness — the bare call
+        // resolved a flat 45s for >512KB bodies and outer-killed cold
+        // prefills the stream layer would have allowed (10-16/17: 38×504).
         capMs:
           this.config?.fetchStartTimeoutCapMs ??
           resolveNonStreamTotalBudgetMs(
-            resolveDirectHeadersTimeoutMs(),
+            resolveDirectHeadersTimeoutMs(process.env, JSON.stringify(transformedBody ?? {})),
             STREAM_READINESS_MAX_TIMEOUT_MS
           ),
       });

@@ -27,6 +27,8 @@ import {
 import { providerAllowsOptionalApiKey } from "@/shared/constants/providers";
 import { shouldUseApiKeyConnectionTest } from "./webSessionTestDispatch";
 import { testCodexAppServerConnection, makeDiagnosis } from "./codexAppServerHealth";
+import { testArkPlanConnection } from "./arkPlanHealth";
+import { getSharedConnectionTestDebounce } from "@/lib/connectionTestDebounce";
 import { recoverKeyHealth } from "@omniroute/open-sse/services/apiKeyRotator.ts";
 import { lockModelIfPerModelQuota } from "@omniroute/open-sse/services/accountFallback.ts";
 import { shouldClearErrorStateOnValidProbe } from "@/lib/usage/providerLimits";
@@ -55,6 +57,8 @@ import { getRequestPeerLocality } from "@/shared/utils/apiAuth";
 /** POST body is optional; when present, only known fields are validated. */
 const providerConnectionTestBodySchema = z.object({
   validationModelId: z.string().max(500).optional(),
+  /** nnd.35 #98: bypass the debounce for operator-initiated tests. */
+  forceRefresh: z.boolean().optional(),
 });
 
 function hasQoderToken(connection: any): boolean {
@@ -72,7 +76,11 @@ function hasQoderToken(connection: any): boolean {
 
 // GHSA-jmq6-8j86-8xqj: getCliRuntimeStatus() spawns on the host (LOCAL_ONLY capability),
 // but these routes stay remote-reachable — only loopback/LAN callers and the scheduler probe.
-export type ConnectionTestOptions = { allowLocalRuntimeProbe?: boolean };
+export type ConnectionTestOptions = {
+  allowLocalRuntimeProbe?: boolean;
+  /** Bypass the #20/#27 debounce — operator Test button & scheduler probes. */
+  forceRefresh?: boolean;
+};
 
 export async function getProviderRuntimeStatus(
   connection: any,
@@ -937,7 +945,7 @@ async function testApiKeyConnection(connection: any) {
  * @param {string} validationModelId Optional custom model ID to test connection with
  * @returns {Promise<object>} Test result (same shape as the JSON response)
  */
-export async function testSingleConnection(
+async function runConnectionTest(
   connectionId: string,
   validationModelId?: string,
   options: ConnectionTestOptions = {}
@@ -996,6 +1004,15 @@ export async function testSingleConnection(
   // connection down. Returns null for non-app-server connections (fall through).
   const appServerResult = await testCodexAppServerConnection(connection);
 
+  // nnd.35 #97 (replay of #18, dropped by the 51 merge in b2be9e08d3): Ark plan
+  // nodes (volces.com/api/{coding,plan}) fall through to a BILLED POST
+  // /v1/messages probe in the generic validator (their /models 404s) — the
+  // hourly sweep kept the plan active around the clock and polluted the 5h
+  // window's first-request anchor (docs/201). A positively-successful V4
+  // control-plane quota probe is non-billed and proves plan + AK/SK + network
+  // in one call — short-circuit valid. Returns null on anything else.
+  const arkPlanResult = await testArkPlanConnection(connection);
+
   if ((runtime as any)?.diagnosis) {
     result = {
       valid: false,
@@ -1006,6 +1023,10 @@ export async function testSingleConnection(
   } else if (appServerResult) {
     result = await runWithProxyContext(proxyInfo?.proxy || null, () =>
       Promise.resolve(appServerResult)
+    );
+  } else if (arkPlanResult) {
+    result = await runWithProxyContext(proxyInfo?.proxy || null, () =>
+      Promise.resolve(arkPlanResult)
     );
   } else if (shouldUseApiKeyConnectionTest(connection.authType, provider)) {
     const enrichedConnection = validationModelId
@@ -1217,6 +1238,32 @@ export async function testSingleConnection(
   };
 }
 
+/**
+ * nnd.35 #98 (replay of #20/#27, orphaned by the 51 merge in b2be9e08d3 —
+ * module + tests survived, zero runtime importers since nnd.31). A dashboard
+ * tab left open re-fires the batch loop every ~300s; within the debounce
+ * window the previous completed result is replayed (debounced: true) with no
+ * upstream call, no DB health mutation, and no call_logs write. The scheduler
+ * and the operator's Test button pass forceRefresh to always run a real
+ * probe. Only completed tests (testedAt set) are cached.
+ */
+export async function testSingleConnection(
+  connectionId: string,
+  validationModelId?: string,
+  options: ConnectionTestOptions = {}
+) {
+  const debounce = getSharedConnectionTestDebounce();
+  const cached = debounce.lookup(connectionId, { forceRefresh: options.forceRefresh });
+  if (cached) {
+    return { ...(cached.result as Record<string, unknown>), debounced: true };
+  }
+  const result = await runConnectionTest(connectionId, validationModelId, options);
+  if (result && typeof result === "object" && (result as { testedAt?: unknown }).testedAt) {
+    debounce.record(connectionId, result, (result as { valid?: unknown }).valid !== true);
+  }
+  return result;
+}
+
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
@@ -1231,10 +1278,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (isValidationFailure(validation)) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
-    const { validationModelId } = validation.data;
+    const { validationModelId, forceRefresh } = validation.data;
 
     const data = await testSingleConnection(id, validationModelId, {
       allowLocalRuntimeProbe: getRequestPeerLocality(request) !== "remote",
+      forceRefresh,
     });
 
     if (data.error === "Connection not found") {

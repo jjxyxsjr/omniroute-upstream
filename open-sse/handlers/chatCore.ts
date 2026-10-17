@@ -3324,8 +3324,14 @@ async function handleChatCoreInner({
                   executionExpirationMs:
                     bodyToSend?.stream === true
                       ? computeStreamingExecutionExpirationMs(
+                          // nnd.35 #96: bind the serialized body so the floor
+                          // carries #88 volume tiers + reasoning-effort
+                          // awareness (bare call = flat 45s outer-kill).
                           resolveNonStreamTotalBudgetMs(
-                            resolveDirectHeadersTimeoutMs(),
+                            resolveDirectHeadersTimeoutMs(
+                              process.env,
+                              bodyToSend ? JSON.stringify(bodyToSend) : null
+                            ),
                             STREAM_READINESS_MAX_TIMEOUT_MS
                           )
                         )

@@ -704,6 +704,13 @@ async function handleComboChatInner({
     clientRequestedStream,
     config,
     comboTargetTimeoutMs,
+    // nnd.35 #95: the 51-split merge dropped comboTimeoutMs from this
+    // destructure, so the local recompute below (`config.comboTimeoutMs || 0`)
+    // silently discarded the nnd.23 #55 env wake-up (240s startup budget) and
+    // the per-loop safety floor — rotation truncation re-slept and loopSafety
+    // fell back to the 10-min blunt cut (deep-hunt P0-2). Take the
+    // setup-resolved value instead of recomputing.
+    comboTimeoutMs: resolvedComboTimeoutMs,
     reasoningTokenBufferEnabled,
   } = phaseComboSetup(comboCtx);
   body = comboCtx.body;
@@ -1030,7 +1037,9 @@ async function handleComboChatInner({
   );
   const comboCooldownAttempt = { current: 0 };
   const comboCooldownBudgetLeftMs = { current: resilienceSettings.comboCooldownWait.budgetMs };
-  const comboTimeoutMs = config.comboTimeoutMs || 0;
+  // nnd.35 #95: use the setup-resolved budget (per-combo config || env wake-up
+  // default), NOT a bare `config.comboTimeoutMs || 0` — see destructure note.
+  const comboTimeoutMs = resolvedComboTimeoutMs;
   const comboStartTime = Date.now();
 
   const state: AttemptLoopState = {

@@ -83,6 +83,12 @@ export async function recordRejectedRequestUsage(input: RejectedRequestUsageInpu
     duration,
     tokens: {},
     error: error || null,
+    // nnd.35 #99: pre-dispatch rejections are gateway-produced errors, so
+    // queueWaitMs/ttftMs stay NULL by design (never queued, never upstream) —
+    // but errorRawHead carries the raw head of the error text so #93's
+    // "every error row is self-explanatory" invariant holds on this path too
+    // (deep-hunt T5-F1: ~90-130 rows/day previously landed with no raw head).
+    errorRawHead: error ? String(error).slice(0, 512) : null,
     // #12150 P2 item 7: this request was rejected BEFORE the guardrail chain ran
     // (circuit-breaker-open / combo-exhausted), so the video-bridge guardrail
     // never redacted the transcript. Redact defensively here — a no-op clone for
