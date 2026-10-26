@@ -29,11 +29,12 @@ import { shouldUseApiKeyConnectionTest } from "./webSessionTestDispatch";
 import { testCodexAppServerConnection, makeDiagnosis } from "./codexAppServerHealth";
 import { testArkPlanConnection } from "./arkPlanHealth";
 import { getSharedConnectionTestDebounce } from "@/lib/connectionTestDebounce";
-import { recoverKeyHealth } from "@omniroute/open-sse/services/apiKeyRotator.ts";
+import { persistConnectionTestHealth } from "./connectionTestHealth";
 import { lockModelIfPerModelQuota } from "@omniroute/open-sse/services/accountFallback.ts";
+import { clearTestedBreakers } from "@/lib/resilience/clearTestedBreakers";
 import { shouldClearErrorStateOnValidProbe } from "@/lib/usage/providerLimits";
 import { isConnectionUnavailableToAuxiliaryActivity } from "@/lib/exclusiveLeaseIsolation";
-import { buildApiKeyConnectionTestResult } from "./apiKeyTestResult";
+import * as apiKeyTestResult from "./apiKeyTestResult";
 import { classifyOAuthProbeInconclusive, OAUTH_TEST_CONFIG } from "./oauthTestConfig";
 import { isGeoBlockedError } from "@omniroute/open-sse/services/errorClassifier.ts";
 import * as retirement from "@/lib/providers/chatgptWebRetirementResponse";
@@ -80,6 +81,16 @@ export type ConnectionTestOptions = {
   allowLocalRuntimeProbe?: boolean;
   /** Bypass the #20/#27 debounce — operator Test button & scheduler probes. */
   forceRefresh?: boolean;
+  /**
+   * S-01 (#15159): whether a provider validator reached from this test may spawn a
+   * local child process (currently only the devin cloud-agent CLI fallback). These
+   * routes stay remote-reachable for legitimate dashboard use, so the spawn is gated
+   * here at its call site on the trusted peer-locality header — the same shape as
+   * allowLocalRuntimeProbe above. Defaults to permissive for the internal scheduler.
+   */
+  allowLocalSpawn?: boolean;
+  /** #16190: false keeps an unverifiable (skipped) test from switching a connection on. */
+  activateUnverified?: boolean;
 };
 
 export async function getProviderRuntimeStatus(
@@ -902,7 +913,7 @@ export async function testOAuthConnection(
 /**
  * Test API key connection
  */
-async function testApiKeyConnection(connection: any) {
+async function testApiKeyConnection(connection: any, allowLocalSpawn = true) {
   const requiresApiKey = !providerAllowsOptionalApiKey(connection.provider);
   if (requiresApiKey && !connection.apiKey) {
     const error = "Missing API key";
@@ -918,6 +929,7 @@ async function testApiKeyConnection(connection: any) {
       provider: connection.provider,
       apiKey: connection.apiKey,
       providerSpecificData: connection.providerSpecificData,
+      allowLocalSpawn,
     })
   );
 
@@ -936,7 +948,7 @@ async function testApiKeyConnection(connection: any) {
     ? makeDiagnosis("ok", "upstream", null, null)
     : classifyFailure({ error, statusCode: result.statusCode, provider: connection.provider });
 
-  return buildApiKeyConnectionTestResult(result, error, diagnosis);
+  return apiKeyTestResult.buildApiKeyConnectionTestResult(result, error, diagnosis);
 }
 
 /**
@@ -1039,7 +1051,7 @@ async function runConnectionTest(
         }
       : connection;
     result = await runWithProxyContext(proxyInfo?.proxy || null, () =>
-      testApiKeyConnection(enrichedConnection)
+      testApiKeyConnection(enrichedConnection, options.allowLocalSpawn ?? true)
     );
   } else {
     result = await runWithProxyContext(proxyInfo?.proxy || null, () =>
@@ -1072,13 +1084,11 @@ async function runConnectionTest(
     connection) as typeof connection;
   const operatorDisabled = isOperatorDisabled(latest);
 
-  // Unsupported validation capability is neutral: the provider cannot be verified through the
-  // generic test surface, which says nothing about its credential. Do not mutate persisted
-  // credential health (testStatus/lastError/etc.) — but DO activate it if it isn't already: under
-  // the "only advertise tested connections" default (connections start isActive:false, see
-  // POST /api/providers) it would stay hidden from /v1/models forever. Operator-disabled stays off.
+  // An unsupported validation says nothing about the credential: keep its health as is, but switch
+  // it on (new connections start isActive:false and would stay off /v1/models forever), unless an
+  // operator switched it off or the caller passed activateUnverified:false (#16190).
   if (result.skipped === true) {
-    if (latest.isActive !== true && !operatorDisabled) {
+    if (latest.isActive !== true && !operatorDisabled && options.activateUnverified !== false) {
       try {
         await updateProviderConnection(connectionId, { isActive: true });
       } catch (activateError) {
@@ -1103,18 +1113,6 @@ async function runConnectionTest(
       ? makeDiagnosis("ok", "local", null, null)
       : classifyFailure({ error: result.error, statusCode: result.statusCode, provider }));
 
-  // #9623: a failed connection test must not paint the connection permanently red.
-  // Previously a non-terminal failure wrote `testStatus: "error"` with
-  // `rateLimitedUntil: null` — since the cooldown filter only ever skips entries
-  // whose rateLimitedUntil is in the future, a null cooldown left the connection
-  // permanently unavailable after a transient outage. Give non-terminal test
-  // failures a short cooldown so the lazy-recovery path retries them.
-  const terminalTestStatuses = new Set(["banned", "expired", "credits_exhausted"]);
-  const isTerminalFailure =
-    !result.valid &&
-    terminalTestStatuses.has(String(diagnosis.code ?? diagnosis.type ?? "").toLowerCase());
-  const testFailureCooldownMs = result.valid ? 0 : 30_000; // 30s retry window
-
   // A successful credential probe proves the KEY is valid. It does NOT prove the
   // quota window reopened: the probe is a cheap auth/models call that never touches
   // the chat quota a weekly cap applies to. Clearing an ACTIVE cooldown here — which
@@ -1128,60 +1126,20 @@ async function runConnectionTest(
     connection as { rateLimitedUntil?: string | null },
     result.valid
   );
-  const lastErrorType = result.valid ? connection.lastErrorType : diagnosis.type;
-
-  const updateData: Record<string, any> = {
-    testStatus: clearErrorState ? "active" : result.valid ? connection.testStatus : "error",
-    // A passing test is the sole activation signal under the "only advertise tested-working
-    // connections" default (POST /api/providers creates connections isActive:false). Only ever
-    // flips ON: a failing test leaves isActive untouched (a transient failure must not take a
-    // working connection out of rotation — the cooldown/rateLimitedUntil below handles that), so
-    // this never deactivates anything, nor re-enables an operator-disabled one.
-    ...(result.valid && !operatorDisabled ? { isActive: true } : {}),
-    lastError: clearErrorState ? null : result.valid ? connection.lastError : result.error,
-    lastErrorAt: clearErrorState ? null : result.valid ? connection.lastErrorAt : now,
-    lastTested: now,
-    lastErrorType: clearErrorState ? null : lastErrorType,
-    lastErrorSource: clearErrorState
-      ? null
-      : result.valid
-        ? connection.lastErrorSource
-        : diagnosis.source,
-    errorCode: clearErrorState
-      ? null
-      : result.valid
-        ? connection.errorCode
-        : diagnosis.code || result.statusCode || null,
-    rateLimitedUntil: clearErrorState
-      ? null
-      : isTerminalFailure
-        ? connection.rateLimitedUntil || null
-        : result.valid
-          ? connection.rateLimitedUntil || null
-          : new Date(Date.now() + testFailureCooldownMs).toISOString(),
-  };
-
-  if (clearErrorState) {
-    updateData.backoffLevel = 0;
-  }
-
-  if (result.valid && (connection.apiKey || connection.accessToken)) {
-    const recovered = recoverKeyHealth(connectionId, "primary", latest.providerSpecificData);
-    if (recovered) updateData.providerSpecificData = recovered;
-  }
-
-  if (result.refreshed && result.newTokens) {
-    updateData.accessToken = result.newTokens.accessToken;
-    if (result.newTokens.refreshToken) {
-      updateData.refreshToken = result.newTokens.refreshToken;
-    }
-    if (result.newTokens.expiresIn) {
-      updateData.expiresAt = new Date(Date.now() + result.newTokens.expiresIn * 1000).toISOString();
-    }
-  }
-
-  // Update status in db
-  await updateProviderConnection(connectionId, updateData);
+  await persistConnectionTestHealth({
+    connectionId,
+    provider,
+    connection,
+    latest,
+    result,
+    diagnosis,
+    operatorDisabled,
+    clearErrorState,
+    now,
+    persist: updateProviderConnection,
+  });
+  // Once persisted, same gate as the error state: a valid probe also closes a DEGRADED breaker.
+  if (clearErrorState) clearTestedBreakers(provider, connectionId);
 
   // Sync to cloud if token was refreshed
   if (result.refreshed) {
@@ -1283,6 +1241,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const data = await testSingleConnection(id, validationModelId, {
       allowLocalRuntimeProbe: getRequestPeerLocality(request) !== "remote",
       forceRefresh,
+      allowLocalSpawn: getRequestPeerLocality(request) !== "remote",
     });
 
     if (data.error === "Connection not found") {
