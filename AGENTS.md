@@ -17,7 +17,7 @@
 - 发版镜像：`omniroute:v3.8.51-nnd.N`（229 本地构建；⚠️ tag 前缀随上游基线版本走——nnd.31/32 曾沿用旧模板打成 v3.8.50-nnd.N 后重打，大合并后构建命令的 tag 前缀必须同步改；上游大版本合并后需 `--build-arg OMNIROUTE_BUILD_MEMORY_MB=14336`，默认 6G 堆会 OOM）
 - 补丁台账：`deploy/docs/155-source-fork-patches.md`
 - 生产台账：`deploy/docs/060-production.md`（每笔操作必记）
-- 上游合并 SOP：`deploy/skills/omniroute-dev/upstream-merge-sop.md`（**大版本合并必读**，nnd.31 实战定型；预案研究档=156）
+- 上游合并 SOP：`deploy/skills/omniroute-dev/upstream-merge-sop.md`（**大版本合并必读**，nnd.31 实战定型；51 预案研究档已删、git 历史可查）
 
 ## Skill 体系（4 个）
 
