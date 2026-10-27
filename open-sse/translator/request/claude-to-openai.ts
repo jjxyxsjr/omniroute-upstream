@@ -546,16 +546,6 @@ function convertClaudeMessage(msg, preserveCacheControl = false) {
           // #2069 — carry the client's cache_control breakpoint through to
           // caching-capable OpenAI-format providers (DashScope/alibaba, etc.).
           if (preserveCacheControl && block.cache_control !== undefined) {
-              } else if (
-                c.type === "image" &&
-                c.source?.type === "url" &&
-                typeof c.source.url === "string"
-              ) {
-                // 丢图收尾 (nnd.12): URL-sourced nested images used to fall
-                // through to the JSON.stringify fallback — the model never saw
-                // the image. Mirror the top-level URL handling (see above).
-                parts.push({ type: "image_url", image_url: { url: c.source.url } });
-                hasImage = true;
             textPart.cache_control = block.cache_control;
           }
           parts.push(textPart);
