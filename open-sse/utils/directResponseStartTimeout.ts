@@ -199,6 +199,40 @@ function resolveFlatDirectHeadersFloorMs(
   return base;
 }
 
+// nnd.36 (#96 52-merge revision): serialize a body ONLY when it plausibly
+// reaches the #88 volume tiers. Upstream 52's serialization-parity contract
+// keeps exactly ONE JSON.stringify per execution, so the outer deadline
+// bindings must not add a second one for ordinary bodies. Bounded structural
+// estimate (underestimates ~3-5% vs real JSON — the 400KB gate compensates;
+// tier thresholds are 512KB/2MB).
+export function serializeBodyForDeadlineTier(body: unknown): string | null {
+  const estimate = (v: unknown, depth: number): number => {
+    if (v === null || v === undefined) return 4;
+    switch (typeof v) {
+      case "string":
+        return v.length + 2;
+      case "number":
+      case "boolean":
+        return 8;
+      case "object": {
+        if (depth > 12) return 32;
+        if (Array.isArray(v)) {
+          let sum = 2;
+          for (const item of v) sum += estimate(item, depth + 1) + 1;
+          return sum;
+        }
+        let sum = 2;
+        for (const [k, val] of Object.entries(v))
+          sum += k.length + 4 + estimate(val, depth + 1) + 1;
+        return sum;
+      }
+      default:
+        return 16;
+    }
+  };
+  return estimate(body, 0) >= 400_000 ? JSON.stringify(body) : null;
+}
+
 // #13703: `attempt` 0 is the pooled dispatcher (flat floor, #10214's
 // zombie-socket rationale); attempt 1+ is the fresh-socket retry, which has
 // no zombie to detect and so defers to resolveDirectRetryTimeoutMs instead.

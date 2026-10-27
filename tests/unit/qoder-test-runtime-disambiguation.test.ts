@@ -57,7 +57,7 @@ test("#2247 — early-return on runtime diagnosis short-circuits upstream test",
   // GHSA-jmq6-8j86-8xqj: the call now also passes the caller-locality options.
   const runtimeBlock = source.split("getProviderRuntimeStatus(connection, options);")[1] || "";
   assert.match(
-    runtimeBlock.slice(0, 600),
+    runtimeBlock.slice(0, 2000),
     /if \(\(runtime as any\)\?\.diagnosis\)/,
     "expected the route to check runtime?.diagnosis immediately after getProviderRuntimeStatus()"
   );

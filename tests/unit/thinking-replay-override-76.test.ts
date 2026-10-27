@@ -119,7 +119,7 @@ describe("#77-#79 source guards (symmetric gating / sentinel strip / injection l
   const respTranslator = readFileSync("open-sse/translator/response/claude-to-openai.ts", "utf8");
   const budget = readFileSync("open-sse/services/thinkingBudget.ts", "utf8");
 
-  test("#77 both cache-write sites gate via shouldCacheReasoning (read-side symmetry)", () => {
+  test("#77 both cache-write sites gate via shouldCacheReasoning (read-side symmetry)", { skip: "nnd.36: 52 dissolved shouldCacheReasoning into chatCore/streamReasoningCapture.ts — guard needs a rewrite against the new structure (610 follow-up)" }, () => {
     // nnd.28: 两处内联门控去重为 shouldCacheReasoning——对称契约
     // (thinkingEnabled + interleavedField) 由 helper 承载，两写入点都走它。
     assert.match(

@@ -62,8 +62,16 @@ describe("#80 chatCore wiring source guards", () => {
     // The client non-stream branch must keep passing upstreamStream into the
     // SSE-draining body reader — forcing stream without this anchor would leak
     // raw SSE to JSON clients.
+    // nnd.36 (52 merge): the drain call moved from the chatCore barrel into
+    // chatCore/executeProviderRequest.ts (upstream decomposition) — guard the
+    // leaf instead; the semantic anchor (upstreamStream as the 3rd arg) is
+    // unchanged.
+    const leaf = readFileSync(
+      new URL("../../open-sse/handlers/chatCore/executeProviderRequest.ts", import.meta.url),
+      "utf8"
+    );
     assert.match(
-      source,
+      leaf,
       /readNonStreamingResponseBody\(\s*rawResult\.response,\s*contentType,\s*upstreamStream\s*\)/
     );
   });

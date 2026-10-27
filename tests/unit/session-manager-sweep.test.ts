@@ -19,9 +19,13 @@ test("MAX_SESSIONS constant exists and is 200", () => {
 });
 
 test("SESSION_TTL_MS is 15 minutes (15 * 60 * 1000)", () => {
+  // nnd fork (nnd.17, 2026-09-06): production-verified stickiness TTL raised
+  // 15→60 minutes (cache warmth — first-token p50 4.6s→3.2s), operator-tunable
+  // via OMNIROUTE_SESSION_TTL_MIN. Upstream's literal 15*60*1000 assertion is
+  // superseded by the fork default; guard the fork shape instead.
   assert.ok(
-    src.includes("15 * 60 * 1000"),
-    "SESSION_TTL_MS should be 15 * 60 * 1000"
+    src.includes('resolveTtlMsFromEnv("OMNIROUTE_SESSION_TTL_MIN", 60)'),
+    "SESSION_TTL_MS should resolve from OMNIROUTE_SESSION_TTL_MIN with the nnd.17 fork default of 60 minutes"
   );
 });
 
@@ -333,7 +337,7 @@ test("getSessionInfo returns null for expired session (TTL behavioral)", () => {
   const info1 = mod.getSessionInfo("ttl-expire");
   assert.ok(info1, "session should exist immediately after creation");
 
-  fakeNow += 16 * 60 * 1000;
+  fakeNow += 61 * 60 * 1000; // nnd.17 fork TTL=60min
   const info2 = mod.getSessionInfo("ttl-expire");
   assert.equal(info2, null, "session should be expired after 16 minutes");
 
@@ -370,7 +374,7 @@ test("getActiveSessions excludes expired sessions (behavioral)", () => {
   fakeNow += 5 * 60 * 1000;
   mod.touchSession("active-3");
 
-  fakeNow += 11 * 60 * 1000 + 1;
+  fakeNow += 56 * 60 * 1000 + 1; // nnd.17 fork TTL=60min: active-1/2 age 61min+1 (expired), active-3 56min+1 (alive)
 
   const sessions = mod.getActiveSessions();
   const ids = sessions.map((s) => s.sessionId);
@@ -445,7 +449,7 @@ test("mixed sessions: expired ones gone, fresh ones survive after TTL check", ()
     mod.touchSession(`old-${i}`);
   }
 
-  fakeNow += 16 * 60 * 1000;
+  fakeNow += 61 * 60 * 1000; // nnd.17 fork TTL=60min
 
   for (let i = 0; i < 10; i++) {
     mod.touchSession(`new-${i}`);
@@ -493,7 +497,7 @@ test("session expires at SESSION_TTL_MS + 1ms boundary", () => {
 
   mod.touchSession("boundary-sess");
 
-  fakeNow += 15 * 60 * 1000 + 1;
+  fakeNow += 60 * 60 * 1000 + 1; // nnd.17 fork TTL=60min
   const info = mod.getSessionInfo("boundary-sess");
   assert.equal(info, null, "session at 15 min + 1ms should be expired");
 

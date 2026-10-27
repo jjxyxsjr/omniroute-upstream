@@ -40,6 +40,7 @@ import { withResilienceActionsContext } from "./chatCore/resilienceAttemptContex
 import { notePreviousResponseResumed } from "./chatCore/resumedResilienceNotes.ts";
 import { runStreamingResponse } from "./chatCore/streamingResponse.ts";
 import { runStreamingTail } from "./chatCore/streamingTail.ts";
+import { resolveForceUpstreamStreaming } from "./chatCore/forceUpstreamStreaming.ts";
 import { sanitizeChatRequestBody } from "./chatCore/sanitization.ts";
 import { isReasoningContinuationIncompatible } from "./chatCore/reasoningInputGate.ts";
 
@@ -2501,6 +2502,12 @@ async function handleChatCoreInner({
     trustedEffortContext,
     upstreamStream,
     userAgent,
+    // nnd.25 #93: the leaf reports the wire-form error head of every non-ok
+    // upstream response (raw bytes, pre-JSON.parse) so the attemptLogging
+    // getter can persist it — see the `errorRawHead` closure above.
+    onErrorRawHead: (h: string | undefined) => {
+      errorRawHead = h;
+    },
   };
   // The pre-decomposition inline executeProviderRequest closed over the LIVE
   // `translatedBody` binding: every mid-flight rebinding (pipeline wire update,
@@ -2512,32 +2519,10 @@ async function handleChatCoreInner({
     translatedBody = next as typeof translatedBody;
     executeProviderRequestDeps.translatedBody = next as Record<string, unknown>;
   };
-  const executeProviderRequest = async (
+  const executeProviderRequest = (
     modelToCall: string = effectiveModel,
     allowDedup: boolean = false
-  ) => {
-    const res = await executeProviderRequestLeaf(
-      executeProviderRequestDeps,
-      modelToCall,
-      allowDedup
-    );
-    // nnd.25 #93 (157 §六-1): capture the wire-form error head (raw bytes,
-    // pre-JSON.parse — \u003c= escape forms preserved) off every non-ok
-    // upstream response, before the response modules consume the body. The
-    // attemptLogging getter closes over `errorRawHead`; error_summary's
-    // truncation + escape restoration was the dual root of the two-day
-    // max_tokens misdiagnosis. Last error wins; success never clears.
-    const resp = res?.response as Response | undefined;
-    if (resp && typeof resp.clone === "function" && !resp.ok) {
-      try {
-        const t = await resp.clone().text();
-        if (t) errorRawHead = t.slice(0, 512);
-      } catch {
-        // body already consumed — best-effort only
-      }
-    }
-    return res;
-  };
+  ) => executeProviderRequestLeaf(executeProviderRequestDeps, modelToCall, allowDedup);
 
   // Snapshot + message count helpers extracted to chatCore/providerRequestRegistration.ts
   // (chatCore slice 2).

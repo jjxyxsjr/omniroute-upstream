@@ -6,6 +6,7 @@ import { resolveFetchStartTimeout } from "../utils/fetchStartTimeoutPolicy.ts";
 import {
   resolveDirectHeadersTimeoutMs,
   resolveNonStreamTotalBudgetMs,
+  serializeBodyForDeadlineTier,
 } from "../utils/directResponseStartTimeout.ts";
 import { STREAM_READINESS_MAX_TIMEOUT_MS } from "../config/constants.ts";
 import {
@@ -968,10 +969,15 @@ export class BaseExecutor {
         // volume-aware tier and reasoning-effort awareness — the bare call
         // resolved a flat 45s for >512KB bodies and outer-killed cold
         // prefills the stream layer would have allowed (10-16/17: 38×504).
+        // nnd.36: serialize only when the estimate plausibly reaches the tier
+        // (upstream 52 serialization-parity contract — one stringify/exec).
         capMs:
           this.config?.fetchStartTimeoutCapMs ??
           resolveNonStreamTotalBudgetMs(
-            resolveDirectHeadersTimeoutMs(process.env, JSON.stringify(transformedBody ?? {})),
+            resolveDirectHeadersTimeoutMs(
+              process.env,
+              serializeBodyForDeadlineTier(transformedBody ?? {})
+            ),
             STREAM_READINESS_MAX_TIMEOUT_MS
           ),
       });

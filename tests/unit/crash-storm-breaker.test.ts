@@ -94,14 +94,18 @@ test("crashStormStatus surfaces active entries for diagnostics", () => {
 // 50 线回迁注记：51 起 #12746 把 executeTarget 拆成 executeTargetGates.ts（可直调单测）；
 // 50 线闸体是 combo.ts executeTarget 闭包，无导出缝——接线行为由本守卫 + 旁路容器实弹覆盖
 // （trial 内低阈值 env + 死上游打穿 skip 日志），模块行为由上方 8 个直测全覆盖。
-test("source guard: 50-line wiring — chatCore hook + combo.ts executeTarget gate + decisionTrace reason", () => {
-  const src = readFileSync(join(root, "open-sse", "handlers", "chatCore.ts"), "utf8");
-  const pfStart = src.indexOf("providerFailure: if (!providerResponse.ok)");
-  assert.ok(pfStart >= 0, "providerFailure block not found");
-  const pfEnd = src.indexOf("break providerFailure", pfStart);
-  assert.ok(pfEnd > pfStart);
-  const block = src.slice(pfStart, pfEnd);
-  assert.match(block, /recordCrashFailure\(/);
+test("source guard: 50-line wiring — combo attempt feed hook + executeTarget gate + decisionTrace reason", () => {
+  // nnd.36 (52 merge): upstream 52 decomposed chatCore's inline
+  // `providerFailure:` block into applyProviderFailureClassification +
+  // response submodules. Feeding from BOTH that closure and the combo attempt
+  // would double-sample combo traffic, so the nnd.25 正主 feed stays in the
+  // combo attempt path (executeTargetAttempt) — the guard follows it there.
+  const src = readFileSync(
+    join(root, "open-sse", "services", "combo", "executeTargetAttempt.ts"),
+    "utf8"
+  );
+  const feedCall = src.indexOf("recordCrashFailure(provider,");
+  assert.ok(feedCall >= 0, "feed hook call not found in executeTargetAttempt");
 
   const combo = readFileSync(
     join(root, "open-sse", "services", "combo", "executeTargetGates.ts"),
@@ -114,14 +118,8 @@ test("source guard: 50-line wiring — chatCore hook + combo.ts executeTarget ga
   assert.match(gateRegion, /"crash_storm"/);
   assert.match(gateRegion, /stopProtectedPriorityTarget\(/);
 
-  // 喂点（主河道）：51 拆分后 crash 失败在 chatCore 的 providerFailure 块里
-  // recordCrashFailure(provider,...) 收口。验证该调用存在且位于 providerFailure
-  // 块（4695 起）到其结束标记之间。
-  const pfBlockStart = src.indexOf("providerFailure: if (!providerResponse.ok)");
-  const feedCall = src.indexOf("recordCrashFailure(provider,", pfBlockStart);
-  assert.ok(feedCall > pfBlockStart, "feed hook call not found inside providerFailure block");
-  const afterFeed = src.indexOf("break providerFailure", feedCall);
-  assert.ok(afterFeed > feedCall, "providerFailure block must close after feed hook");
+  // 喂点（主河道）：nnd.25 修复把喂点收口到 combo attempt 路径；上方已断言
+  // executeTargetAttempt 内 recordCrashFailure(provider,...) 在位（52 迁移注记同上）。
 
   const trace = readFileSync(
     join(root, "open-sse", "services", "combo", "decisionTrace.ts"),

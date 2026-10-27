@@ -46,6 +46,7 @@ import {
 import {
   resolveDirectHeadersTimeoutMs,
   resolveNonStreamTotalBudgetMs,
+  serializeBodyForDeadlineTier,
 } from "../../utils/directResponseStartTimeout.ts";
 import { acquireMany as acquireConcurrencyGates } from "../../services/accountSemaphore.ts";
 import { rethrowAdmissionError, remainingQueueBudgetMs } from "./queueBudget.ts";
@@ -107,6 +108,8 @@ export type ExecuteProviderRequestDeps = {
   agentGoalPolicy: AgentGoalPolicy;
   assertManagedLeaseFence: (attemptConnectionId: string | null | undefined) => void;
   buildUpstreamHeadersForExecute: (modelToCall: string) => Record<string, string>;
+  /** nnd fork #93: leaf reports the wire-form error head of non-ok responses. */
+  onErrorRawHead?: (head: string | undefined) => void;
   clientRawRequest: {
     headers?: Headers | Record<string, unknown> | null;
     signal?: AbortSignal | null;
@@ -374,13 +377,15 @@ export async function executeProviderRequest(
                 executionExpirationMs:
                   bodyToSend?.stream === true
                     ? computeStreamingExecutionExpirationMs(
-                        // nnd.35 #96: bind the serialized body so the floor
-                        // carries #88 volume tiers + reasoning-effort
-                        // awareness (bare call = flat 45s outer-kill).
+                        // nnd.35 #96 (52 merge revision): the floor must carry
+                        // #88 volume tiers (bare call = flat 45s outer-kill),
+                        // but upstream 52's serialization-parity contract keeps
+                        // ONE stringify per execution — serializeBodyForDeadlineTier
+                        // cheap-estimates and only large bodies pay the string.
                         resolveNonStreamTotalBudgetMs(
                           resolveDirectHeadersTimeoutMs(
                             process.env,
-                            bodyToSend ? JSON.stringify(bodyToSend) : null
+                            serializeBodyForDeadlineTier(bodyToSend)
                           ),
                           STREAM_READINESS_MAX_TIMEOUT_MS
                         )
@@ -392,6 +397,27 @@ export async function executeProviderRequest(
               }
             );
             const res = normalizeExecutorResult(rawExecutorResult);
+            // nnd.25 #93 (157 §六-1): capture the wire-form error head (raw
+            // bytes, pre-JSON.parse — \u003c= escape forms preserved) off every
+            // non-ok upstream response, before the response modules consume
+            // the body. Last error wins; success never clears. Best-effort:
+            // an already-consumed body degrades to no report.
+            {
+              const errResp = res?.response as Response | undefined;
+              if (
+                deps.onErrorRawHead &&
+                errResp &&
+                typeof errResp.clone === "function" &&
+                !errResp.ok
+              ) {
+                try {
+                  const t = await errResp.clone().text();
+                  deps.onErrorRawHead(t ? t.slice(0, 512) : undefined);
+                } catch {
+                  // body stream already consumed — best-effort only
+                }
+              }
+            }
             res.response = markEmptyTurnExecution(res.response, res.url, execCreds);
             trace("post_executor", { status: res?.response?.status });
 
