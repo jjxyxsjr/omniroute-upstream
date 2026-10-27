@@ -12,9 +12,6 @@ import { runComboWithSafetyLatch } from "./combo/safetyStopLatch.ts";
 
 import { recordComboFailure } from "./combo/failureTracker.ts";
 import { buildRecoveryHint } from "./combo/pinRecovery.ts";
-// nnd 007-a1/010: dead-candidate + saturation filtering for auto candidates.
-import { isModelLocked, isAccountSemaphoreFull } from "./accountFallback.ts";
-import { positiveConnectionCap } from "./combo/quotaStrategies.ts";
 import { buildTargetTimeoutRunner } from "./combo/targetTimeoutRunner.ts";
 import { costKey, resolvePoolCosts } from "./combo/candidateCost.ts";
 import { getComboMetrics } from "./comboMetrics.ts";
@@ -136,7 +133,9 @@ import {
   resolveAutoResetWindowConfig,
   type ResetWindowConfig,
 } from "./combo/quotaScoring.ts";
-import { fetchResetAwareQuotaWithCache, preScreenTargets } from "./combo/quotaStrategies.ts";
+import { fetchResetAwareQuotaWithCache, preScreenTargets, positiveConnectionCap } from "./combo/quotaStrategies.ts";
+// nnd 007-a1/010: dead-candidate + saturation filtering for auto candidates.
+import { isModelLocked, isAccountSemaphoreFull } from "./accountFallback.ts";
 import { buildAutoQuotaThresholds } from "./combo/quotaExhaustionCutoff.ts";
 import { expandTargetsByFingerprints } from "./combo/fingerprintExpansion.ts";
 import { resolveComboTargetPipeline } from "./combo/targetResolution.ts";

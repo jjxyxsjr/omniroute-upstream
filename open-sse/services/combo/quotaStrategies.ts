@@ -33,6 +33,7 @@ import { PRE_SCREEN_CONCURRENCY } from "../comboConfig.ts";
 import { getQuotaFetcher } from "../quotaPreflight.ts";
 import { getCircuitBreaker } from "../../../src/shared/utils/circuitBreaker";
 import { getCachedProviderPoolConnections } from "../providerConnectionPool.ts";
+import { getCachedProviderConnections } from "../../../src/lib/db/readCache";
 import { isAccountSemaphoreFull } from "../accountSemaphore.ts";
 import { MAX_RR_COUNTERS, rrCounters } from "./rrState.ts";
 import type { ResolvedComboTarget, IsModelAvailable } from "./types.ts";
@@ -50,7 +51,6 @@ import { rankByHeadroom, type HeadroomSaturation } from "./headroomRanking.ts";
 import { getInflight, incrementInflight } from "./quotaShareInflight.ts";
 import { preferAntigravityConnectionsWithStoredProject } from "../antigravityProjectPersist.ts";
 import { getQuotaFetchScope } from "../antigravityQuotaFamily.ts";
-import { getCachedProviderConnections } from "../../../src/lib/db/readCache";
 import {
   getQuotaSnapshotFetchedAt,
   getQuotaWeightedRemainingPercent,
