@@ -110,6 +110,8 @@ export type ExecuteProviderRequestDeps = {
   buildUpstreamHeadersForExecute: (modelToCall: string) => Record<string, string>;
   /** nnd fork #93: leaf reports the wire-form error head of non-ok responses. */
   onErrorRawHead?: (head: string | undefined) => void;
+  /** nnd fork 2g-a (#94): leaf stamps the post-gate dispatch moment (queue_wait). */
+  onUpstreamDispatched?: () => void;
   clientRawRequest: {
     headers?: Headers | Record<string, unknown> | null;
     signal?: AbortSignal | null;
@@ -324,6 +326,10 @@ export async function executeProviderRequest(
           updatePendingScope(pendingScope, {
             stage: "waiting_rate_limit",
           });
+          // nnd fork 2g-a (#94): the gate has been acquired and the fetch is
+          // about to leave — this is the queue_wait end stamp (the barrel's
+          // getQueueWaitMs closes over the upstreamDispatchedAt binding).
+          deps.onUpstreamDispatched?.();
 
           try {
             trace("pre_rate_limit", { connectionId: attemptConnectionId });

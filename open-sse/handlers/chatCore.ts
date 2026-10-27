@@ -2508,6 +2508,10 @@ async function handleChatCoreInner({
     onErrorRawHead: (h: string | undefined) => {
       errorRawHead = h;
     },
+    // nnd 2g-a (#94): the leaf stamps the post-gate dispatch moment.
+    onUpstreamDispatched: () => {
+      upstreamDispatchedAt = Date.now();
+    },
   };
   // The pre-decomposition inline executeProviderRequest closed over the LIVE
   // `translatedBody` binding: every mid-flight rebinding (pipeline wire update,
