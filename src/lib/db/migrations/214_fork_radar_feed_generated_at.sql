@@ -1,4 +1,4 @@
--- 197_fork_radar_feed_generated_at.sql
+-- 214_fork (renumbered from our 197 — upstream 52 re-uses 197 for proxy_subscription_core_config)_radar_feed_generated_at.sql
 --
 -- nnd fork backfill. Upstream delivered this ALTER as 163_radar_feed_cache_generated_at,
 -- but our pre-upstream 163_call_logs_latency_phases already occupies version 163 in the

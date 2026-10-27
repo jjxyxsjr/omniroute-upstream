@@ -437,13 +437,20 @@ function isSchemaAlreadyApplied(
       // ttft_ms (plus queue_wait_ms). Skip the upstream 195 ALTER so it does
       // not fail on the duplicate column; the ledger still records 195.
       return hasColumn(db, "call_logs", "ttft_ms");
-    case "198":
-      // nnd fork: queue_wait_ms already exists on a database that ran our 163.
+    case "213":
+      // nnd fork: error_raw_head (our pre-52 200) — column exists on production.
+      return hasColumn(db, "call_logs", "error_raw_head");
+    case "214":
+      // nnd fork: radar_feed_cache.generated_at (our pre-52 197, itself a re-issue
+      // of upstream 163) — fresh databases get the column from upstream 163.
+      return hasColumn(db, "radar_feed_cache", "generated_at");
+    case "215":
+      // nnd fork: queue_wait_ms already exists on a database that ran our 163/198.
       return hasColumn(db, "call_logs", "queue_wait_ms");
-    case "199":
+    case "216":
       // nnd fork: our pre-upstream latency-phases migration (renumbered from 163,
       // which upstream 51 re-uses for radar_feed_cache). Both columns exist on
-      // production; a fresh database gets them from upstream 195 + fork 198, so
+      // production; a fresh database gets them from upstream 195 + fork 215, so
       // this file's idempotency guard covers the residual overlap (the index).
       return hasColumn(db, "call_logs", "ttft_ms") && hasColumn(db, "call_logs", "queue_wait_ms");
     case "003":

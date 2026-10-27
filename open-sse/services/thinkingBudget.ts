@@ -384,12 +384,6 @@ function setCustomBudget(body: unknown, budget: number) {
   }
 
   // Gemini thinking_config
-  // #79 (nnd.26): injection accounting — every gateway-injected thinking budget is
-  // auditable from logs (design study 158 / P5) instead of being discovered via incidents.
-  console.info(
-    `[INJECT] kind=thinking_budget mode=adaptive budget=${budget} multiplier=${multiplier.toFixed(1)} model=${getStringField(bodyRecord, "model")}`
-  );
-
   const generationConfig = toRecord(result.generationConfig);
   if (generationConfig.thinking_config || generationConfig.thinkingConfig) {
     result.generationConfig = {
@@ -442,6 +436,12 @@ function applyAdaptiveBudget(body: unknown, cfg: Partial<ThinkingBudgetConfig>) 
     EFFORT_BUDGETS.medium;
   const scaledBudget = Math.ceil(baseBudget * multiplier);
   const budget = capThinkingBudget(getStringField(bodyRecord, "model"), scaledBudget);
+
+  // #79 (nnd.26): injection accounting — every gateway-injected thinking budget is
+  // auditable from logs (design study 158 / P5) instead of being discovered via incidents.
+  console.info(
+    `[INJECT] kind=thinking_budget mode=adaptive budget=${budget} multiplier=${multiplier.toFixed(1)} model=${getStringField(bodyRecord, "model")}`
+  );
 
   // The effort→budget table collapses high, xhigh and max onto the same number,
   // and setCustomBudget then reads any budget at that ceiling back as xhigh.

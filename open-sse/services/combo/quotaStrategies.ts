@@ -50,6 +50,7 @@ import { rankByHeadroom, type HeadroomSaturation } from "./headroomRanking.ts";
 import { getInflight, incrementInflight } from "./quotaShareInflight.ts";
 import { preferAntigravityConnectionsWithStoredProject } from "../antigravityProjectPersist.ts";
 import { getQuotaFetchScope } from "../antigravityQuotaFamily.ts";
+import { getCachedProviderConnections } from "../../../src/lib/db/readCache";
 import {
   getQuotaSnapshotFetchedAt,
   getQuotaWeightedRemainingPercent,

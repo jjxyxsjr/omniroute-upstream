@@ -14,8 +14,6 @@ const isCloud = typeof globalThis.caches === "object" && globalThis.caches !== n
 const isBuildPhase =
   process.env.NEXT_PHASE === "phase-production-build" || process.env.OMNIROUTE_BUILDING === "1";
 
-/**
- * Directory holding per-request artifact files. Resolved lazily on every call
 // #91: the cap used to be a hardcoded 512KB with no override. Claude-Code-style
 // clients resend the whole session every turn, so the heaviest requests sail
 // past it every time and the size-limit fallback replaced BOTH bodies with a
@@ -31,6 +29,9 @@ function getMaxCallLogArtifactBytes(): number {
     ? Math.min(kb, 16 * 1024) * 1024
     : MAX_CALL_LOG_ARTIFACT_BYTES;
 }
+
+/**
+ * Directory holding per-request artifact files. Resolved lazily on every call
  * so a test-context redirect picked up after import (see `resolveWritableDataDir`)
  * carries the artifacts along with the database instead of leaving them in the
  * operator's real data directory.
