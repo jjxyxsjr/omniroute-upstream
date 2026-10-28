@@ -5,11 +5,11 @@
 
 ## 仓库拓扑（本仓实际结构）
 
-| 仓库           | 远端                                  | 用途                                      |
-| -------------- | ------------------------------------- | ----------------------------------------- |
+| 仓库           | 远端                                   | 用途                                             |
+| -------------- | -------------------------------------- | ------------------------------------------------ |
 | 主仓（本目录） | github.com/cheaper-inference/OmniRoute | 上游基线（只读；原 diegosouzapw 旧地址仍重定向） |
-| `deploy/`      | git.nndrobot.com:ai/OmniRoute.git     | **运维正源**：docs/skills/scripts/backups |
-| GitLab src 仓  | git.nndrobot.com:ai/OmniRoute-src.git | **二开源码**：nnd 补丁分支                |
+| `deploy/`      | git.nndrobot.com:ai/OmniRoute.git      | **运维正源**：docs/skills/scripts/backups        |
+| GitLab src 仓  | git.nndrobot.com:ai/OmniRoute-src.git  | **二开源码**：nnd 补丁分支                       |
 
 ## 生产线
 
@@ -19,14 +19,15 @@
 - 生产台账：`deploy/docs/060-production.md`（每笔操作必记）
 - 上游合并 SOP：`deploy/skills/omniroute-dev/upstream-merge-sop.md`（**大版本合并必读**，nnd.31 实战定型；51 预案研究档已删、git 历史可查）
 
-## Skill 体系（4 个）
+## Skill 体系（5 个）
 
-| Skill            | 触发词                           |
-| ---------------- | -------------------------------- |
-| `omniroute-dev`  | 发版/上线/补丁/测上游/直连对比   |
-| `omniroute-ops`  | 查日志/改配置/内存/很慢/配额/MCP |
-| `omniroute-wiki` | 项目/文档/用量/协作              |
-| `zcode-tools`    | ZCode/cron/插件                  |
+| Skill               | 触发词                                |
+| ------------------- | ------------------------------------- |
+| `omniroute-dev`     | 发版/上线/补丁/测上游/直连对比        |
+| `omniroute-ops`     | 查日志/改配置/内存/很慢/配额/MCP      |
+| `omniroute-wiki`    | 项目/文档/用量/协作                   |
+| `omniroute-contrib` | 提PR/提issue/上游贡献/PR候选/上游反馈 |
+| `zcode-tools`       | ZCode/cron/插件                       |
 
 正源在 `deploy/skills/`，post-commit hook 自动同步到 `~/.agents/skills/`。
 
