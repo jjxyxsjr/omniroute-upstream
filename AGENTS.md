@@ -1,13 +1,13 @@
 # OmniRoute 生产运维指南（nnd fork）
 
-> 本仓是 diegosouzapw/OmniRoute 的生产 fork（编号至 nnd.36=上游 v3.8.52 大合并批，2026-10-27 19:0x 上线；nnd.2 镜像曾构建但从未上线——生产 nnd.1→nnd.3，实发 35 代；补丁 #1-#101 在册（#95-#101=51 合并重放丢失族+观测保真，见 155 §二十三）+ 51 合并批收编/重放清单见 155 §十九；#90 错峰生产禁用——GLM 七账号窗同步是操作员故意设计）。
+> 本仓是 cheaper-inference/OmniRoute（原 diegosouzapw/OmniRoute，2026-10-28 实测易主、旧地址重定向）的生产 fork（编号至 nnd.36=上游 v3.8.52 大合并批，2026-10-27 19:0x 上线；nnd.2 镜像曾构建但从未上线——生产 nnd.1→nnd.3，实发 35 代；补丁 #1-#101 在册（#95-#101=51 合并重放丢失族+观测保真，见 155 §二十三）+ 51 合并批收编/重放清单见 155 §十九；#90 错峰生产禁用——GLM 七账号窗同步是操作员故意设计）。
 > 上游的代码贡献规范见 `UPSTREAM-GUIDE.md`（拉上游更新时参考）。
 
 ## 仓库拓扑（本仓实际结构）
 
 | 仓库           | 远端                                  | 用途                                      |
 | -------------- | ------------------------------------- | ----------------------------------------- |
-| 主仓（本目录） | github.com/diegosouzapw/OmniRoute     | 上游 fork 基线（只读）                    |
+| 主仓（本目录） | github.com/cheaper-inference/OmniRoute | 上游基线（只读；原 diegosouzapw 旧地址仍重定向） |
 | `deploy/`      | git.nndrobot.com:ai/OmniRoute.git     | **运维正源**：docs/skills/scripts/backups |
 | GitLab src 仓  | git.nndrobot.com:ai/OmniRoute-src.git | **二开源码**：nnd 补丁分支                |
 
