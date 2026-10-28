@@ -15,7 +15,7 @@
 
 - 生产 VPS：172.16.90.229（容器 `omniroute`，端口 20128；**当前版本以 `docker ps` 实测为准**——2026-10-27 19:0x 起 **nnd.36**（上游 v3.8.52 基线），回滚锚 nnd.35；nnd.33 锚库保全在 db_backups/anchors/）
 - 发版镜像：`omniroute:v3.8.52-nnd.N`（229 本地构建；⚠️ tag 前缀随上游基线版本走——nnd.31/32 曾沿用旧模板打成 v3.8.50-nnd.N 后重打，大合并后构建命令的 tag 前缀必须同步改；上游大版本合并后需 `--build-arg OMNIROUTE_BUILD_MEMORY_MB=14336`，默认 6G 堆会 OOM）
-- 补丁台账：`deploy/docs/155-source-fork-patches.md`
+- 补丁台账：`deploy/docs/155-source-fork-patches.md`（内容账；**上游化状态正源=GitLab `ai/OmniRoute-src` issues**，标题 `[二开#N]`，见 omniroute-contrib skill）
 - 生产台账：`deploy/docs/060-production.md`（每笔操作必记）
 - 上游合并 SOP：`deploy/skills/omniroute-dev/upstream-merge-sop.md`（**大版本合并必读**，nnd.31 实战定型；51 预案研究档已删、git 历史可查）
 
