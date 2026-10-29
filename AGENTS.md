@@ -1,6 +1,6 @@
 # OmniRoute 生产运维指南（nnd fork）
 
-> 本仓是 cheaper-inference/OmniRoute（原 diegosouzapw/OmniRoute，2026-10-28 实测易主、旧地址重定向）的生产 fork（编号至 nnd.36=上游 v3.8.52 大合并批，2026-10-27 19:0x 上线；nnd.2 镜像曾构建但从未上线——生产 nnd.1→nnd.3，实发 35 代；补丁 #1-#101 在册（#95-#101=51 合并重放丢失族+观测保真，见 155 §二十三）+ 51 合并批收编/重放清单见 155 §十九；#90 错峰生产禁用——GLM 七账号窗同步是操作员故意设计）。
+> 本仓是 cheaper-inference/OmniRoute（原 diegosouzapw/OmniRoute，2026-10-28 实测易主、旧地址重定向）的生产 fork（编号至 nnd.37=#102 对冲败者 499 分离批，2026-10-30 02:4x 上线；nnd.2 镜像曾构建但从未上线——生产 nnd.1→nnd.3，实发 36 代；补丁 #1-#101 在册（#95-#101=51 合并重放丢失族+观测保真，见 155 §二十三）+ 51 合并批收编/重放清单见 155 §十九；#90 错峰生产禁用——GLM 七账号窗同步是操作员故意设计）。
 > 上游的代码贡献规范见 `UPSTREAM-GUIDE.md`（拉上游更新时参考）。
 
 ## 仓库拓扑（本仓实际结构）
@@ -13,7 +13,7 @@
 
 ## 生产线
 
-- 生产 VPS：172.16.90.229（容器 `omniroute`，端口 20128；**当前版本以 `docker ps` 实测为准**——2026-10-27 19:0x 起 **nnd.36**（上游 v3.8.52 基线），回滚锚 nnd.35；nnd.33 锚库保全在 db_backups/anchors/）
+- 生产 VPS：172.16.90.229（容器 `omniroute`，端口 20128；**当前版本以 `docker ps` 实测为准**——2026-10-30 02:4x 起 **nnd.37**（上游 v3.8.52 基线+#102），回滚锚 nnd.36；nnd.33 锚库保全在 db_backups/anchors/）
 - 发版镜像：`omniroute:v3.8.52-nnd.N`（229 本地构建；⚠️ tag 前缀随上游基线版本走——nnd.31/32 曾沿用旧模板打成 v3.8.50-nnd.N 后重打，大合并后构建命令的 tag 前缀必须同步改；上游大版本合并后需 `--build-arg OMNIROUTE_BUILD_MEMORY_MB=14336`，默认 6G 堆会 OOM）
 - 补丁台账：`deploy/docs/155-source-fork-patches.md`（内容账；**上游化状态正源=GitLab `ai/OmniRoute-src` issues**，标题 `[二开#N]`，见 omniroute-contrib skill）
 - 生产台账：`deploy/docs/060-production.md`（每笔操作必记）
