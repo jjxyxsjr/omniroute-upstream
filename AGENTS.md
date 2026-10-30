@@ -11,6 +11,16 @@
 | `deploy/`      | git.nndrobot.com:ai/OmniRoute.git      | **运维正源**：docs/skills/scripts/backups        |
 | GitLab src 仓  | git.nndrobot.com:ai/OmniRoute-src.git  | **二开源码**：nnd 补丁分支                       |
 
+## 一仓两制：会话开工先认清自己在哪个区（ZCode 必读）
+
+主仓一个目录承载两个身份，别在错的区干活：
+
+- **上游展厅**＝主仓工作区（`/home/nnd/OmniRoute`，永远停 `release/v3.8.x` 上游基线）：只读参照——看上游源码、当 diff 基线；**绝不在主仓工作区做二开提交**。
+- **二开车间**＝`.claude/worktrees/<房间>`（一任务一 worktree 一分支）：所有 nnd 补丁改码只在这里；推 `gitlab` 远端备份；PR 脚本（`pr-scaffold.sh`/`pr-screen.sh`）必须在 worktree 内跑。
+- **运维后院**＝`deploy/`（独立 git 仓）：台账/skills/脚本全在这里。
+
+**cwd 铁律**：跨仓 git 一律显式 `git -C /home/nnd/OmniRoute`（或先 cd 进目标 worktree）——裸 `git` 在 deploy 子仓里会误当主仓操作、在主仓跑会拿错分支，实战已踩坑多次。各 worktree 内的 AGENTS.md 是分支快照，以主仓这份为权威。
+
 ## 生产线
 
 - 生产 VPS：172.16.90.229（容器 `omniroute`，端口 20128；**当前版本以 `docker ps` 实测为准**——2026-10-30 02:4x 起 **nnd.37**（上游 v3.8.52 基线+#102），回滚锚 nnd.36；nnd.33 锚库保全在 db_backups/anchors/）
