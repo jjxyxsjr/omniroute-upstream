@@ -13,6 +13,8 @@
 
 ## 一仓两制：会话开工先认清自己在哪个区（ZCode 必读）
 
+**ZCode 会话开工目录＝`~/omniroute-nnd`（二开总部）**：`cd ~/omniroute-nnd` 再开 ZCode——那里只有三根指针（`showroom`/`rooms`/`ops`）+ 本地图的符号链接（正源仍在本文件，零漂移）。老入口 `/home/nnd/OmniRoute` 仍可用（＝展厅本体）。
+
 主仓一个目录承载两个身份，别在错的区干活：
 
 - **上游展厅**＝主仓工作区（`/home/nnd/OmniRoute`，永远停最新上游基线，当前 `release/v3.8.53`）：只读参照——看上游源码、当 diff 基线；**绝不在主仓工作区做二开提交**。上游出新 release 后 `git checkout --no-track -b release/vX.Y.Z origin/release/vX.Y.Z` 刷新展厅并随身带 AGENTS.md（勿设 origin 跟踪，防误推上游）。
