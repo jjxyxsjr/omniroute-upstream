@@ -250,6 +250,13 @@ export async function runStreamingTail(deps: StreamingTailDeps) {
         classificationError: classificationReason,
         errorType: streamReadiness.type,
         errorCode: streamReadiness.code,
+        // 8b/#47: first-raw-byte arrival moment so the attempt loop can tell a
+        // zero-byte hang (null — terminate per the 9-08 lesson) from a
+        // transport-alive-but-contentless timeout (timestamp — one bounded
+        // switch). Dropped here during the v3.8.52 restructure, which silently
+        // disabled the nnd.20 zero-byte rule; the response header carries the
+        // same signal but nothing parsed it.
+        anyByteAt: streamReadiness.anyByteAt ?? null,
         response: failureResponse,
       },
       carry: { onPipelineStreamError, onClientDisconnectFinalize, turnExecutionHandedOffToStream },

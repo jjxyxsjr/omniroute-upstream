@@ -741,9 +741,6 @@ class StreamReadinessReadTimeout extends Error {
     super("STREAM_READINESS_TIMEOUT");
   }
 }
-// Arrival moment of the most recent upstream chunk (2g-a): when the readiness
-// signal fires, this is when the first content event reached the gateway.
-let lastChunkAt: number | null = null;
 
 function readWithTimeout(
   read: Promise<ReadableStreamReadResult<Uint8Array>>,
@@ -790,6 +787,13 @@ export async function ensureStreamReadiness(
     upstreamDiagnostic: null,
   };
   const startedAt = Date.now();
+  // Arrival moment of the most recent upstream chunk (2g-a): when the readiness
+  // signal fires, this is when the first content event reached the gateway.
+  // nnd.38: per-call, NOT module scope — a module-level stamp let one stream's
+  // chunks mark every concurrent stream as "bytes arrived", so a true zero-byte
+  // hang could inherit a sibling request's timestamp and slip past the nnd.20
+  // terminate rule as a switchable "slow but alive" stall.
+  let lastChunkAt: number | null = null;
   const effectiveTimeoutMs = Math.max(0, Math.floor(options.timeoutMs));
   // Hard ceiling: the deadline may extend on liveness signals (bytes arriving),
   // but never past this absolute maximum.  When maxTimeoutMs is omitted the

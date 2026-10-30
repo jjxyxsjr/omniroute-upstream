@@ -99,7 +99,10 @@ import {
   isOpenAIResponsesStoreEnabled,
 } from "@/lib/providers/requestDefaults";
 import { guardrailRegistry, resolveDisabledGuardrails } from "@/lib/guardrails";
-import { shouldSwitchConnectionOnStreamReadinessTimeout } from "./chatHelpers.ts";
+import {
+  shouldSwitchConnectionOnStreamReadinessTimeout,
+  resolveStreamReadinessAnyByteAt,
+} from "./chatHelpers.ts";
 import {
   resolveModelOrError,
   comboTargetCredentialProviderId,
@@ -1892,6 +1895,12 @@ async function handleSingleModelChat(
     let lastError = requestRetryLastError;
     let lastStatus = requestRetryLastStatus;
     let lastCooldownMs = requestRetryLastCooldownMs;
+    // #72 (nnd.38 restore): the typed 504 built by the readiness gate
+    // (STREAM_READINESS_TIMEOUT + Retry-After + the any-byte-at header). When
+    // every eligible connection is exhausted, surfacing THIS response instead
+    // of a rebuilt generic error tells standard retry tooling the request is
+    // retryable and why it died. Lost in the v3.8.52 restructure.
+    let lastReadinessFailureResponse: Response | null = null;
     let preselectedCredentials = initialPreselectedCredentials;
     initialPreselectedCredentials = null;
 
@@ -2077,6 +2086,17 @@ async function handleSingleModelChat(
           excludedConnectionIds.size > 0
             ? Array.from(excludedConnectionIds)[excludedConnectionIds.size - 1]
             : null;
+        // #72 (nnd.38 restore): when the failure that exhausted the pool was a
+        // stream-readiness timeout, pass through the gate's typed 504
+        // (STREAM_READINESS_TIMEOUT + Retry-After + any-byte-at header) rather
+        // than the rebuilt generic error, so clients learn the request is
+        // retryable and why it stalled.
+        if (lastReadinessFailureResponse) {
+          return withSelectedConnectionHeader(
+            lastReadinessFailureResponse,
+            lastFailedConnectionId
+          );
+        }
         return withSelectedConnectionHeader(noCredsRes, lastFailedConnectionId);
       }
 
@@ -2442,6 +2462,25 @@ async function handleSingleModelChat(
         // too. A second hang surfaces the retry-504 below.
         // nnd.31 merge: on the non-combo path the upstream same-connection retry
         // above already spent the one recovery, so don't fire as a second retry.
+        // nnd.38: the readiness signal rides TWO carriers — the leg result's
+        // anyByteAt field, and (for inner-gate failures that surface through
+        // executor generic branches) the X-OmniRoute-Any-Byte-At response
+        // header. Read both so either carrier revives the nnd.20 rule.
+        const streamReadinessAnyByteAt = resolveStreamReadinessAnyByteAt(
+          result as { anyByteAt?: number | null; response?: Response | null }
+        );
+        if ((result as { response?: Response }).response) {
+          lastReadinessFailureResponse = (result as { response?: Response }).response;
+        }
+        if (streamReadinessAnyByteAt === null) {
+          // nnd.20 zero-byte rule made visible: a confirmed silent upstream
+          // terminates here instead of re-sending (9-08 heap-amplification
+          // lesson). Log the decision so the protection's firing is observable.
+          log.warn(
+            "STREAM",
+            `${provider}/${model} readiness deadline fired with ZERO upstream bytes — terminating per nnd.20 (no re-send), not switching`
+          );
+        }
         if (
           (isCombo || streamReadinessTimeoutRetries === 0) &&
           shouldSwitchConnectionOnStreamReadinessTimeout(
@@ -2451,13 +2490,15 @@ async function handleSingleModelChat(
             hasForcedConnection,
             // nnd.20: zero-byte hang terminates instead of switching — a silent
             // upstream stays silent for the re-sent body too (9-08 OOM lesson).
-            (result as { anyByteAt?: number | null }).anyByteAt
+            streamReadinessAnyByteAt
           )
         ) {
           streamReadinessSwitchRetries += 1;
           log.warn(
             "STREAM",
-            `${provider}/${model} produced no stream content before the readiness deadline — switching connection once (attempt ${streamReadinessSwitchRetries})`
+            `${provider}/${model} produced no stream content before the readiness deadline — switching connection once (attempt ${streamReadinessSwitchRetries}, firstByteAt=${
+              streamReadinessAnyByteAt === null ? "none" : new Date(streamReadinessAnyByteAt).toISOString()
+            })`
           );
           excludedConnectionIds.add(credentials.connectionId);
           lastError = result.error || "stream readiness timeout";

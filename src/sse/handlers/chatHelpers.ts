@@ -14,6 +14,10 @@ import { connectionHasExtraKeys } from "@omniroute/open-sse/services/apiKeyRotat
 import { clearRequestRejectedStreak } from "@omniroute/open-sse/services/requestRejectedStreak.ts";
 import { clearAntigravityVerificationUrl } from "@omniroute/open-sse/handlers/chatCore/antigravityVerificationState.ts";
 import {
+  ANY_BYTE_AT_HEADER,
+  parseAnyByteAtHeader,
+} from "@omniroute/open-sse/utils/streamReadiness.ts";
+import {
   createBuiltinAutoCombo,
   prepareBuiltinAutoComboInputs,
 } from "@omniroute/open-sse/services/autoCombo/builtinCatalog.ts";
@@ -1033,6 +1037,28 @@ export function shouldSwitchConnectionOnStreamReadinessTimeout(
   // readiness gate) terminates.
   if (anyByteAt === null) return false;
   return errorType === "stream_timeout" || errorCode === "STREAM_READINESS_TIMEOUT";
+}
+
+/**
+ * nnd.38 (#47): resolve the zero-first-byte signal from whichever carrier it
+ * arrived on. The readiness gate stamps the signal twice — the leg result's
+ * `anyByteAt` field (outer gate) and the `X-OmniRoute-Any-Byte-At` response
+ * header (survives executor paths where only headers cross, e.g. the glm
+ * inner gate). The v3.8.52 restructure dropped BOTH carriers (field lost in
+ * the leg-result construction, header never parsed), silently disabling the
+ * nnd.20 zero-byte rule. Reading either carrier revives it:
+ *   number  = transport alive (bytes arrived) but no content → bounded switch
+ *   null    = confirmed zero bytes → terminate, never re-send (9-08 lesson)
+ *   undefined = neither carrier present (unknown/legacy) → predicate default
+ */
+export function resolveStreamReadinessAnyByteAt(result: {
+  anyByteAt?: number | null;
+  response?: Response | null;
+}): number | null | undefined {
+  if (result.anyByteAt !== undefined) return result.anyByteAt;
+  const response = result.response;
+  if (!response?.headers) return undefined;
+  return parseAnyByteAtHeader(response.headers.get(ANY_BYTE_AT_HEADER));
 }
 
 export function decideProxyResolutionFailure(
