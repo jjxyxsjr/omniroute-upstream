@@ -16,7 +16,7 @@
 主仓一个目录承载两个身份，别在错的区干活：
 
 - **上游展厅**＝主仓工作区（`/home/nnd/OmniRoute`，永远停最新上游基线，当前 `release/v3.8.53`）：只读参照——看上游源码、当 diff 基线；**绝不在主仓工作区做二开提交**。上游出新 release 后 `git checkout --no-track -b release/vX.Y.Z origin/release/vX.Y.Z` 刷新展厅并随身带 AGENTS.md（勿设 origin 跟踪，防误推上游）。
-- **二开车间**＝`.claude/worktrees/<房间>`（一任务一 worktree 一分支）：所有 nnd 补丁改码只在这里；推 `gitlab` 远端备份；PR 脚本（`pr-scaffold.sh`/`pr-screen.sh`）必须在 worktree 内跑。
+- **二开车间**＝`rooms/<房间>`（根目录可见，一任务一 worktree 一分支）：所有 nnd 补丁改码只在这里；推 `gitlab` 远端备份；PR 脚本（`pr-scaffold.sh`/`pr-screen.sh`）必须在 worktree 内跑。
 - **运维后院**＝`deploy/`（独立 git 仓）：台账/skills/脚本全在这里。
 
 **地图同步规矩**：AGENTS.md 规矩变更＝主仓成文提交后，须覆盖同步到活跃 nnd 车间分支——车间会话只看见自己房间的 AGENTS.md 快照（ZCode 实测：工作区 AGENTS.md 按请求热生效，改完下一请求即达）。建车间用 `deploy/skills/omniroute-dev/scripts/fork-worktree.sh new <名>`（自动带入主仓权威版、默认基线取最新 nnd 批次分支），`ls`/`rm` 管查与拆。
