@@ -5,11 +5,11 @@
 
 ## 仓库拓扑（本仓实际结构）
 
-| 仓库           | 远端                                   | 用途                                             |
-| -------------- | -------------------------------------- | ------------------------------------------------ |
-| 主仓（本目录） | github.com/cheaper-inference/OmniRoute | 上游基线（只读；原 diegosouzapw 旧地址仍重定向） |
-| `deploy/`      | git.nndrobot.com:ai/OmniRoute.git      | **运维正源**：docs/skills/scripts/backups        |
-| GitLab src 仓  | git.nndrobot.com:ai/OmniRoute-src.git  | **二开源码**：nnd 补丁分支                       |
+| 仓库              | 远端                                   | 用途                                                                                                         |
+| ----------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| 主仓（本目录）    | github.com/cheaper-inference/OmniRoute | 上游基线（只读；原 diegosouzapw 旧地址仍重定向）                                                             |
+| `deploy/`         | git.nndrobot.com:ai/code-gateways.git  | **运维正源**（单一仓，2026-10-30 改名自 ai/OmniRoute）：docs/skills/scripts/backups 全在 `omniroute/` 子目录 |
+| ~~GitLab src 仓~~ | ~~ai/OmniRoute-src.git~~               | **已归档只读**（2026-10-30）：issue 已迁 code-gateways，源分支备份走 GitHub fork                             |
 
 ## 一仓两制：会话开工先认清自己在哪个区（ZCode 必读）
 
@@ -18,7 +18,7 @@
 主仓一个目录承载两个身份，别在错的区干活：
 
 - **上游展厅**＝主仓工作区（`/home/nnd/OmniRoute`，永远停最新上游基线，当前 `release/v3.8.53`）：只读参照——看上游源码、当 diff 基线；**绝不在主仓工作区做二开提交**。上游出新 release 后 `git checkout --no-track -b release/vX.Y.Z origin/release/vX.Y.Z` 刷新展厅并随身带 AGENTS.md（勿设 origin 跟踪，防误推上游）。
-- **二开车间**＝`rooms/<房间>`（根目录可见，一任务一 worktree 一分支）：所有 nnd 补丁改码只在这里；推 `gitlab` 远端备份；PR 脚本（`pr-scaffold.sh`/`pr-screen.sh`）必须在 worktree 内跑。
+- **二开车间**＝`rooms/<房间>`（根目录可见，一任务一 worktree 一分支）：所有 nnd 补丁改码只在这里；推 `fork`（GitHub）备份；PR 脚本（`pr-scaffold.sh`/`pr-screen.sh`）必须在 worktree 内跑。
 - **运维后院**＝`deploy/`（独立 git 仓）：台账/skills/脚本全在这里。
 
 **地图同步规矩**：AGENTS.md 规矩变更＝主仓成文提交后，须覆盖同步到活跃 nnd 车间分支——车间会话只看见自己房间的 AGENTS.md 快照（ZCode 实测：工作区 AGENTS.md 按请求热生效，改完下一请求即达）。建车间用 `deploy/skills/omniroute-dev/scripts/fork-worktree.sh new <名>`（自动带入主仓权威版、默认基线取最新 nnd 批次分支），`ls`/`rm` 管查与拆。
@@ -29,7 +29,7 @@
 
 - 生产 VPS：172.16.90.229（容器 `omniroute`，端口 20128；**当前版本以 `docker ps` 实测为准**——2026-10-30 02:4x 起 **nnd.37**（上游 v3.8.52 基线+#102），回滚锚 nnd.36；nnd.33 锚库保全在 db_backups/anchors/）
 - 发版镜像：`omniroute:v3.8.52-nnd.N`（229 本地构建；⚠️ tag 前缀随上游基线版本走——nnd.31/32 曾沿用旧模板打成 v3.8.50-nnd.N 后重打，大合并后构建命令的 tag 前缀必须同步改；上游大版本合并后需 `--build-arg OMNIROUTE_BUILD_MEMORY_MB=14336`，默认 6G 堆会 OOM）
-- 补丁台账：`deploy/docs/155-source-fork-patches.md`（内容账；**上游化状态正源=GitLab `ai/OmniRoute-src` issues**，标题 `[二开#N]`，见 omniroute-contrib skill）
+- 补丁台账：`deploy/docs/155-source-fork-patches.md`（内容账；**上游化状态正源=GitLab `ai/code-gateways` issues**（`gw:omniroute` 标签），标题 `[二开#N]`，见 omniroute-contrib skill）
 - 生产台账：`deploy/docs/060-production.md`（每笔操作必记）
 - 上游合并 SOP：`deploy/skills/omniroute-dev/upstream-merge-sop.md`（**大版本合并必读**，nnd.31 实战定型；51 预案研究档已删、git 历史可查）
 
