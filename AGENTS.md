@@ -9,7 +9,7 @@
 | ----------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | 主仓（本目录）    | github.com/cheaper-inference/OmniRoute | 上游基线（只读；原 diegosouzapw 旧地址仍重定向）                                                             |
 | `deploy/`         | git.nndrobot.com:ai/code-gateways.git  | **运维正源**（单一仓，2026-10-30 改名自 ai/OmniRoute）：docs/skills/scripts/backups 全在 `omniroute/` 子目录 |
-| ~~GitLab src 仓~~ | ~~ai/OmniRoute-src.git~~               | **已归档只读**（2026-10-30）：issue 已迁 code-gateways，源分支备份走 GitHub fork                             |
+| ~~GitLab src 仓~~ | ~~ai/OmniRoute-src.git~~               | **已删除**（2026-10-30）：issue 已迁 code-gateways；6 个独有旧分支以 `archive/744/` 前缀保 GitHub fork       |
 
 ## 一仓两制：会话开工先认清自己在哪个区（ZCode 必读）
 
