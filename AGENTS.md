@@ -13,7 +13,7 @@
 
 ## 一仓两制：会话开工先认清自己在哪个区（ZCode 必读）
 
-**ZCode 会话开工目录＝`~/nnd/omniroute`**（多项目总工作区 `~/nnd` 的 omniroute 房间，兄弟房间＝higress/unla）：`cd ~/nnd/omniroute` 再开 ZCode——指针有 `showroom`/`rooms`/`ops`/`prod-env`（含密钥，仅导航）/`build`/`prod-data` + 本地图的符号链接（正源仍在本文件，零漂移）；总工作区地图＝`~/nnd/AGENTS.md`（跨项目索引+通则）。老入口 `/home/nnd/OmniRoute` 仍可用（＝展厅本体）。
+**ZCode 会话开工目录＝`~/dev/omniroute`**（多项目总工作区 `~/dev` 的 omniroute 房间，兄弟房间＝higress/unla）：`cd ~/dev/omniroute` 再开 ZCode——指针有 `showroom`/`rooms`/`ops`/`prod-env`（含密钥，仅导航）/`build`/`prod-data` + 本地图的符号链接（正源仍在本文件，零漂移）；总工作区地图＝`~/dev/AGENTS.md`（跨项目索引+通则）。老入口 `/home/nnd/OmniRoute` 仍可用（＝展厅本体）。
 
 主仓一个目录承载两个身份，别在错的区干活：
 
