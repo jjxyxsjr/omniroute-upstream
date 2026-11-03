@@ -8,7 +8,9 @@ import {
   resolveNonStreamTotalBudgetMs,
   serializeBodyForDeadlineTier,
 } from "../utils/directResponseStartTimeout.ts";
-import { STREAM_READINESS_MAX_TIMEOUT_MS } from "../config/constants.ts";
+import { STREAM_READINESS_MAX_TIMEOUT_MS, STREAM_READINESS_TIMEOUT_MS } from "../config/constants.ts";
+import { ensureStreamReadiness } from "../utils/streamReadiness.ts";
+import { resolveBaseStreamReadiness } from "./baseStreamReadiness.ts";
 import {
   resolveAlternateFormat,
   type AlternateFormat,
@@ -1818,6 +1820,31 @@ export class BaseExecutor {
           log?.debug?.("RETRY", `${response.status} on ${url}, trying fallback ${urlIndex + 1}`);
           lastStatus = response.status;
           continue;
+        }
+
+        // nnd.39 #111 (B17 closure): first-byte readiness gate for stream
+        // responses on custom anthropic-compatible nodes. glm/kiro/grok-web/zed
+        // executors already run ensureStreamReadiness(); the base executor did
+        // not, so a silent upstream left clients with zero bytes until their
+        // own patience ran out (2026-11-02/03 forensics: 233 zero-byte client
+        // aborts in one day, one stream lingering 20 minutes post-abort).
+        // Scoped + dialable via OMNIROUTE_BASE_STREAM_READINESS — see
+        // baseStreamReadiness.ts.
+        if (stream && response.ok) {
+          const gate = resolveBaseStreamReadiness({
+            provider: this.provider,
+            bodyByteLength: bodyString.length,
+            defaultTimeoutMs: STREAM_READINESS_TIMEOUT_MS,
+          });
+          if (gate.enabled) {
+            const readiness = await ensureStreamReadiness(response, {
+              timeoutMs: gate.timeoutMs,
+              provider: this.provider,
+              model,
+              log,
+            });
+            response = readiness.response;
+          }
         }
 
         return {
