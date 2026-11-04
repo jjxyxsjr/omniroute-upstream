@@ -39,6 +39,7 @@ import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { getImageModelEntry, isImageOnlyModel } from "@omniroute/open-sse/config/imageRegistry.ts";
 import { acceptHeaderForcesStream } from "@omniroute/open-sse/utils/aiSdkCompat.ts";
 import { maybeForceClientStreaming } from "@omniroute/open-sse/handlers/chatCore/forceClientStreaming";
+import { createLifecycle, markPhase, markFailed } from "@omniroute/open-sse/handlers/chatCore/requestLifecycle";
 import { applyNoThinkingAlias } from "@omniroute/open-sse/utils/noThinkingAlias.ts";
 import { resolveCcDiscoveryAliasStrip } from "@/lib/ccDiscoveryAliasResolve";
 import {
@@ -943,8 +944,15 @@ async function handleChatImplementation(
       true;
   }
 
+  // #116: create lifecycle tracker at admission boundary
+  const lifecycle = createLifecycle(
+    reqId || `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    { user: apiKeyInfo?.name || "unknown", model: typeof body?.model === "string" ? body.model : "unknown" }
+  );
+
   const admissionRejection = await admissionContext.acquire(apiKeyInfo?.id, { signal }, body);
   if (admissionRejection) {
+    markFailed(lifecycle, `admission rejected: ${admissionRejection.status}`);
     void logAdmissionRejection(admissionRejection, {
       path: new URL(request.url).pathname,
       model: typeof body?.model === "string" && body.model ? body.model : "-",
