@@ -42,7 +42,10 @@ export function isBaseStreamReadinessProvider(provider: string | null | undefine
 }
 
 const AUTO_MS_PER_ESTIMATED_TOKEN = 1.5;
-const AUTO_MAX_TIMEOUT_MS = 300_000;
+// 180s ceiling, not 300s: the combo global budget is 240s (comboTimeoutMs) —
+// a deadline above it would let the global timer fire first and waste the
+// gate entirely. 180s leaves ~60s for one cross-lane retry inside the budget.
+const AUTO_MAX_TIMEOUT_MS = 180_000;
 
 export function resolveBaseStreamReadiness(options: {
   provider: string | null | undefined;

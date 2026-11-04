@@ -83,14 +83,14 @@ test("#111 auto: deadline scales with serialized body bytes and never drops belo
   assert.equal(empty.timeoutMs, BASE);
 });
 
-test("#111 auto: clamps at the 300s ceiling so huge contexts cannot buy an unbounded deadline", () => {
+test("#111 auto: clamps at the 180s ceiling (below the 240s combo global budget) so huge contexts cannot buy a deadline the combo timer would waste", () => {
   const g = resolveBaseStreamReadiness({
     provider: AC,
     bodyByteLength: 900_000, // ≈300k est. tokens → unclamped 510_000
     defaultTimeoutMs: BASE,
     env: "auto",
   });
-  assert.equal(g.timeoutMs, 300_000);
+  assert.equal(g.timeoutMs, 180_000);
 });
 
 test("#111 junk env value falls back to the default gate (safe posture)", () => {
