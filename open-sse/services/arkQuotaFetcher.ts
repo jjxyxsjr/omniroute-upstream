@@ -344,6 +344,31 @@ async function callArkControlPlane(
   }
 }
 
+/**
+ * #110: quota fetch failures were completely silent (null → reset-aware drops
+ * the lane to the no-quota floor), so a ~10h control-plane outage on the
+ * night of 2026-11-02/03 left no trace and both ark lanes quietly vanished
+ * from lead rotation. One warn per scope per 5 minutes — enough to trace an
+ * outage window in docker logs without spamming a hard-down API.
+ */
+const WARN_SUPPRESS_MS = 300_000;
+const warnBudget = new Map<string, number>();
+
+/** Returns true when this call actually emitted a warn (for tests). */
+export function warnArkQuotaFetchFailure(
+  scope: string,
+  detail: string,
+  now: number = Date.now()
+): boolean {
+  const last = warnBudget.get(scope);
+  if (last !== undefined && now - last < WARN_SUPPRESS_MS) return false;
+  warnBudget.set(scope, now);
+  console.warn(
+    `[ARK-QUOTA] control-plane fetch failed (${scope}): ${detail} — reset-aware falls back to the no-quota floor for this lane until the fetch recovers`
+  );
+  return true;
+}
+
 export async function fetchArkPlanQuota(
   connectionId: string,
   connection?: Record<string, unknown>
@@ -368,12 +393,25 @@ export async function fetchArkPlanQuota(
 
   for (const action of actions) {
     const { ok, body } = await callArkControlPlane(action, { accessKeyId, secretAccessKey });
-    if (!ok) continue;
+    if (!ok) {
+      const err = (
+        body as { ResponseMetadata?: { Error?: { Code?: string; Message?: string } } } | null
+      )?.ResponseMetadata?.Error;
+      warnArkQuotaFetchFailure(
+        `${action}:${connectionId.slice(0, 8)}`,
+        err ? `${err.Code ?? "?"} ${err.Message ?? ""}`.trim() : "no usable response"
+      );
+      continue;
+    }
     const parsed = action === "GetAFPUsage" ? parseAfpUsage(body) : parseCodingPlanUsage(body);
     if (parsed) {
       quotaCache.set(connectionId, { fetchedAt: Date.now(), quota: parsed });
       return parsed;
     }
+    warnArkQuotaFetchFailure(
+      `${action}:${connectionId.slice(0, 8)}`,
+      "response unparsable (plan not running or no usable windows)"
+    );
   }
   return null;
 }
