@@ -12,7 +12,7 @@
  * #116 (nnd.40). Auth: manage-scope key.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { getInflightSnapshot } from "@/../../open-sse/handlers/chatCore/requestLifecycle";
+import { getInflightSnapshot } from "@omniroute/open-sse/handlers/chatCore/requestLifecycle";
 
 export async function GET(req: NextRequest) {
   try {
