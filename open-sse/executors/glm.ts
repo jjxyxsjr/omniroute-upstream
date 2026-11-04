@@ -20,6 +20,7 @@ import {
   getGlmTransport,
   isGlmClaudePassthrough,
 } from "../config/glmProvider.ts";
+import { resolveProtocolAlignedTransport } from "./glmProtocolAlign.ts";
 import {
   directFetchWithBoundedResponseStart,
   isDirectResponseStartTimeout,
@@ -702,10 +703,12 @@ export class GlmExecutor extends DefaultExecutor {
       return this.executeTransport(input, effortTier.transport);
     }
 
-    const primaryTransport = getGlmTransport(
-      input.credentials.providerSpecificData,
-      this.config.baseUrl
+    const primaryTransport = resolveProtocolAlignedTransport(
+      input.body,
+      getGlmTransport(input.credentials.providerSpecificData, this.config.baseUrl)
     );
+    // #114: the failover door below is the OTHER door — for a protocol-aligned
+    // request that is the pinned (translated) door, so pool liquidity survives.
     const fallbackTransport: GlmTransport = primaryTransport === "openai" ? "anthropic" : "openai";
 
     let primaryResult: GlmExecuteResult | null = null;
