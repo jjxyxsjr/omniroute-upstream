@@ -118,6 +118,8 @@ import {
   isReadinessFailure,
 } from "./emptyContentRetry.ts";
 import { isEmptyStreamSiblingRecoveryEnabled } from "../streamRecovery.ts";
+import { classify429, shouldInternalize429, buildPoolExhaustedResponse } from "./quota429Internalizer.ts";
+import { classifyTransient5xx } from "./transient5xxInternalizer.ts";
 
 export async function executeTargetAttempt(
   opts: ExecuteTargetAttemptOptions
@@ -888,6 +890,41 @@ export async function executeTargetAttempt(
           }
         : undefined;
     const scopedFailure = isScopedFailure(result, errorText, structuredError);
+
+    // #113-B: 429 quota-wall internalization — a single-account quota 429
+    // should never surface to the client while other pool members have quota.
+    // Classify and internalize (rotate to next target) instead.
+    if (result.status === 429) {
+      const remainingTargets = state.orderedTargets.length - state.fallbackCount - 1;
+      const q429 = classify429(errorText, String(target.connectionId ?? ""), Math.max(0, remainingTargets));
+      if (shouldInternalize429(q429)) {
+        deps.log.info("COMBO",
+          `POOL_429_INTERNALIZED: ${q429.kind} on ${modelStr} (${String(errorText).slice(0, 80)}) — rotating to next target (${remainingTargets} remaining)`
+        );
+        // Mark as a normal failure so the combo advances to the next target
+        state.recordedAttempts++;
+        return { ok: false, response: result };
+      }
+      if (q429.kind === "pool-exhausted") {
+        const poolResp = buildPoolExhaustedResponse(deps.combo.name, q429.earliestResetAt);
+        deps.log.warn("COMBO", `POOL_EXHAUSTED: ${poolResp.message}`);
+        state.recordedAttempts++;
+        return { ok: false, response: errorResponse(poolResp.status, poolResp.message) };
+      }
+    }
+
+    // #113-C: transient 5xx internalization — GLM [1234] network errors etc.
+    // should retry on the next target instead of surfacing as terminal.
+    if (result.status >= 500) {
+      const t5xx = classifyTransient5xx(result.status, errorText);
+      if (t5xx.shouldRetry) {
+        deps.log.info("COMBO",
+          `TRANSIENT_5XX_INTERNALIZED: ${t5xx.reason} on ${modelStr} — retrying on next target`
+        );
+        state.recordedAttempts++;
+        return { ok: false, response: result };
+      }
+    }
 
     // #8375: input-bound request-scoped failures (context_length_exceeded) are
     // deterministic for the same input — retrying on other accounts of the same

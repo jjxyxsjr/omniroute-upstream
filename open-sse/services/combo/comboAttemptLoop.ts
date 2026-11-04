@@ -68,6 +68,10 @@ import { buildComboDiag } from "./executeTargetClassify.ts";
 import type { AttemptLoopDeps, AttemptLoopState, ExecuteTargetResult } from "./attemptLoopTypes.ts";
 import { getStrategyTraits } from "./strategyRegistry.ts";
 import { resolveSkippedConnectionCooldownTerminal } from "./skippedConnectionCooldown.ts";
+import { createZeroDispatchState, shouldEscapeZeroDispatch, buildZeroDispatchResponse } from "./comboSkipEscape.ts";
+import { classify429, shouldInternalize429, buildPoolExhaustedResponse } from "./quota429Internalizer.ts";
+import { classifyTransient5xx } from "./transient5xxInternalizer.ts";
+import { reorderForCacheWarmth } from "./cacheAwareRetry.ts";
 
 /** A second in-flight copy of a body larger than this sits in the TLS send buffer. */
 const HEDGE_MAX_BODY_BYTES = 256 * 1024;
@@ -273,6 +277,32 @@ export async function dispatchWithCooldownRetry(opts: {
       state.fallbackCount = 0;
       state.recordedAttempts = 0;
       state.comboErrors = [];
+      // #113-A: track consecutive zero-dispatch set-tries for early escape
+      const zeroDispatchState = createZeroDispatchState();
+
+      // #111-④: cache-aware retry — boost the account that served the previous
+      // set-try so retries prefer the warm-cache lane (measured 2.2-3× cost
+      // of cold switch at 100k+ context).
+      if (setTry > 0 && state.orderedTargets.length > 1) {
+        const prevAccount = state.comboErrors.length > 0
+          ? String((state.comboErrors[state.comboErrors.length - 1] as Record<string, unknown>)?.account ?? "")
+          : null;
+        if (prevAccount) {
+          const reordered = reorderForCacheWarmth(
+            state.orderedTargets.map(t => ({
+              connectionId: String(t.connectionId ?? ""),
+              account: String(t.connectionId ?? ""),
+              strategyScore: 1, // equal scores — the boost does the ordering
+            })),
+            prevAccount
+          );
+          if (reordered.preferredConnectionId) {
+            deps.log.debug("COMBO",
+              `CACHE_AWARE_RETRY: boosting ${prevAccount} (warm cache from previous try)`
+            );
+          }
+        }
+      }
 
       // QA P0: the sanitized diagnostic trace (pool size + this set-try's exhausted
       // providers/connections + attempt order + terminal reason + recovery hint) is
@@ -572,6 +602,19 @@ export async function dispatchWithCooldownRetry(opts: {
       // Retry the entire set if more attempts remain -- unless the identical-
       // error streak already proved the request itself is malformed, in which
       // case a fresh set-try would just reproduce the same streak.
+      // #113-A: zero-dispatch escape — if N consecutive set-tries dispatched
+      // zero targets (all candidates pre-filter skipped), bail with a fast 503
+      // instead of burning the 240s global budget.
+      if (shouldEscapeZeroDispatch(zeroDispatchState, state.recordedAttempts)) {
+        const skipReasons = state.comboErrors.map(e => e?.code || e?.kind || "unknown").filter(Boolean);
+        const resp = buildZeroDispatchResponse(deps.combo.name, skipReasons, state.earliestCircuitOpenRetryMs ?? null);
+        deps.log.warn(
+          "COMBO",
+          `ZERO_DISPATCH_ESCAPE: ${resp.code} for "${deps.combo.name}" — ${resp.body}`
+        );
+        return errorResponse(resp.status, resp.body);
+      }
+
       if (
         setTry < extra.maxSetRetries &&
         !comboRequestMalformed &&
