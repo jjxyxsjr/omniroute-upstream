@@ -38,6 +38,7 @@ import { resolveBareModelToConnectionDefault } from "@omniroute/open-sse/service
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { getImageModelEntry, isImageOnlyModel } from "@omniroute/open-sse/config/imageRegistry.ts";
 import { acceptHeaderForcesStream } from "@omniroute/open-sse/utils/aiSdkCompat.ts";
+import { maybeForceClientStreaming } from "../../open-sse/handlers/chatCore/forceClientStreaming.ts";
 import { applyNoThinkingAlias } from "@omniroute/open-sse/utils/noThinkingAlias.ts";
 import { resolveCcDiscoveryAliasStrip } from "@/lib/ccDiscoveryAliasResolve";
 import {
@@ -686,6 +687,21 @@ async function handleChatImplementation(
       "STREAM",
       "Accept: text/event-stream header → overriding stream=true (body had no stream field)"
     );
+  }
+
+  // #115 (nnd.40): auto-convert client stream=false to stream=true when the
+  // feature is enabled — non-streaming on large contexts gives zero bytes until
+  // the entire generation is done (the worst "stuck" experience). The client
+  // sees first bytes immediately instead of waiting in total silence.
+  if (body.stream === false) {
+    const patched = maybeForceClientStreaming(body);
+    if (patched !== body) {
+      body = patched;
+      log.debug(
+        "STREAM",
+        "FORCE_CLIENT_STREAMING: stream=false → stream=true (client gets SSE)"
+      );
+    }
   }
 
   // Log request endpoint and model
