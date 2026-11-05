@@ -19,7 +19,7 @@
  */
 
 export type Quota429Classification =
-  | { kind: "single-account"; account: string; resetHint: string | null }
+  | { kind: "single-account"; account: string; resetHint: string | null; resetAtMs: number | null }
   | { kind: "pool-exhausted"; earliestResetAt: number | null; exhaustedAccounts: string[] }
   | { kind: "rate-limit"; account: string; retryAfterMs: number | null }
   | { kind: "not-quota"; reason: string };
@@ -29,10 +29,17 @@ export type Quota429Classification =
  * These are the only 429 subtypes that should trigger internal rotation;
  * rate-limit 429s (too-fast requests) are also internalized but with a
  * short backoff instead of a long cooldown.
+ *
+ * nnd.41: ark walls phrase as "exceeded the <window> usage quota" — the
+ * window is NOT limited to 5-hour. Production evidence 2026-11-05 00:53:
+ * "exceeded the monthly usage quota" (and "weekly" since 11-04 17:27)
+ * leaked raw to clients because the old pattern demanded
+ * "monthly.*limit.*exceeded" (wrong word order). The generic
+ * [\w-]+ window keeps future walls (daily/etc.) covered too.
  */
 const QUOTA_WALL_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\[1308\].*5 小时.*上限/s, label: "glm_5h_wall" },
-  { re: /exceeded the 5-hour usage quota/is, label: "ark_5h_wall" },
+  { re: /exceeded the [\w-]+ usage quota/is, label: "upstream_usage_wall" },
   { re: /exceeded your current quota/is, label: "anthropic_quota" },
   { re: /monthly.*limit.*exceeded/is, label: "monthly_wall" },
 ];
@@ -43,14 +50,25 @@ const RATE_LIMIT_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /too many requests/is, label: "too_many_requests" },
 ];
 
-/** Extract reset timestamp from GLM/ark error text (ISO or epoch ms). */
-function extractResetAt(errorText: string): number | null {
-  const isoMatch = errorText.match(/(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/);
-  if (isoMatch) {
-    const ts = new Date(isoMatch[1].replace(" ", "T") + (isoMatch[1].includes("T") ? "" : "Z")).getTime();
-    if (Number.isFinite(ts)) return ts;
+/**
+ * Extract reset timestamp from upstream error text as epoch ms.
+ * nnd.41: ark walls carry a numeric UTC offset ("2026-11-20 23:59:59 +0800
+ * CST") — the old parser treated the local wall clock as UTC, mis-timing
+ * lockouts and pool-recovery hints by 8h.
+ */
+export function extractResetAtMs(errorText: string): number | null {
+  const m = (errorText || "").match(
+    /(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(?:\s*([+-])(\d{2}):?(\d{2}))?/
+  );
+  if (!m) return null;
+  const base = new Date(m[1].replace(" ", "T") + (m[1].includes("T") ? "" : "Z")).getTime();
+  if (!Number.isFinite(base)) return null;
+  if (m[2]) {
+    // "+0800" = local is UTC+8 → UTC = local − 8h (and vice versa for "−").
+    const offsetMinutes = (parseInt(m[3], 10) * 60 + parseInt(m[4], 10)) * (m[2] === "+" ? -1 : 1);
+    return base + offsetMinutes * 60_000;
   }
-  return null;
+  return base;
 }
 
 export function classify429(
@@ -64,11 +82,11 @@ export function classify429(
   for (const { re, label } of QUOTA_WALL_PATTERNS) {
     if (re.test(text)) {
       if (remainingTargetCount > 0) {
-        return { kind: "single-account", account, resetHint: label };
+        return { kind: "single-account", account, resetHint: label, resetAtMs: extractResetAtMs(text) };
       }
       return {
         kind: "pool-exhausted",
-        earliestResetAt: extractResetAt(text),
+        earliestResetAt: extractResetAtMs(text),
         exhaustedAccounts: [account],
       };
     }

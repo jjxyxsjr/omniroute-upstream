@@ -9,7 +9,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { classify429, buildPoolExhaustedResponse, shouldInternalize429 } = await import(
+const { classify429, buildPoolExhaustedResponse, shouldInternalize429, extractResetAtMs } = await import(
   "../../open-sse/services/combo/quota429Internalizer.ts"
 );
 
@@ -37,13 +37,53 @@ test("#113B GLM [1302] rate limit → rate-limit (internalize with short backoff
   assert.equal(c.kind, "rate-limit");
 });
 
+test("#113B nnd.41 ark MONTHLY wall (2026-11-05 00:53 production text) → single-account, never raw-leak", () => {
+  const text =
+    "[429]: You have exceeded the monthly usage quota. It will reset at 2026-11-20 23:59:59 +0800 CST. We recommend upgrading your plan for more quota, or waiting for the reset. Request id: 021793840026875b045cd2f7c61da91e37e7e70760c22da25d533";
+  const c = classify429(text, "ark-agent-13668996989", 5);
+  assert.equal(c.kind, "single-account");
+  if (c.kind === "single-account") {
+    assert.ok(c.resetAtMs !== null, "reset time extracted for lockout-until-reset");
+    // 2026-11-20 23:59:59 +0800 = 2026-11-20T15:59:59Z — old parser said 23:59:59Z (8h off)
+    assert.equal(new Date(c.resetAtMs!).toISOString(), "2026-11-20T15:59:59.000Z");
+  }
+});
+
+test("#113B nnd.41 ark MONTHLY wall with ZERO remaining → pool-exhausted with +0800-aware reset", () => {
+  const text = "You have exceeded the monthly usage quota. It will reset at 2026-11-20 23:59:59 +0800 CST.";
+  const c = classify429(text, "ark-agent-13668996989", 0);
+  assert.equal(c.kind, "pool-exhausted");
+  if (c.kind === "pool-exhausted") {
+    assert.equal(new Date(c.earliestResetAt!).toISOString(), "2026-11-20T15:59:59.000Z");
+  }
+});
+
+test("#113B nnd.41 ark WEEKLY wall (2026-11-04 17:27 production text) → single-account", () => {
+  const text =
+    "[429]: You have exceeded the weekly usage quota. It will reset at 2026-11-09 00:00:00 +0800 CST. We recommend upgrading your plan for more quota, or waiting for the reset.";
+  const c = classify429(text, "ark-13668996989", 3);
+  assert.equal(c.kind, "single-account");
+  if (c.kind === "single-account") {
+    assert.equal(new Date(c.resetAtMs!).toISOString(), "2026-11-08T16:00:00.000Z");
+  }
+});
+
+test("#113B nnd.41 future window phrasing (daily etc.) covered by generic wall pattern", () => {
+  assert.equal(classify429("You have exceeded the daily usage quota. It will reset at 2026-11-06 00:00:00 +0800 CST.", "ark-x", 2).kind, "single-account");
+});
+
+test("#113B nnd.41 extractResetAtMs: no-offset text stays UTC", () => {
+  assert.equal(extractResetAtMs("reset at 2026-11-04T16:01:23Z"), Date.parse("2026-11-04T16:01:23Z"));
+  assert.equal(extractResetAtMs("no timestamp here"), null);
+});
+
 test("#113B unknown 429 text → not-quota (don't internalize blindly)", () => {
   const c = classify429("Something else went wrong", "some-account", 5);
   assert.equal(c.kind, "not-quota");
 });
 
 test("#113B internalize: single-account and rate-limit → true; pool-exhausted and not-quota → false", () => {
-  assert.equal(shouldInternalize429({ kind: "single-account", account: "a", resetHint: "x" }), true);
+  assert.equal(shouldInternalize429({ kind: "single-account", account: "a", resetHint: "x", resetAtMs: null }), true);
   assert.equal(shouldInternalize429({ kind: "rate-limit", account: "a", retryAfterMs: 5000 }), true);
   assert.equal(shouldInternalize429({ kind: "pool-exhausted", earliestResetAt: null, exhaustedAccounts: [] }), false);
   assert.equal(shouldInternalize429({ kind: "not-quota", reason: "x" }), false);

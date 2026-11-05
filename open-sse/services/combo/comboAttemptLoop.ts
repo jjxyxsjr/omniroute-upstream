@@ -69,8 +69,6 @@ import type { AttemptLoopDeps, AttemptLoopState, ExecuteTargetResult } from "./a
 import { getStrategyTraits } from "./strategyRegistry.ts";
 import { resolveSkippedConnectionCooldownTerminal } from "./skippedConnectionCooldown.ts";
 import { createZeroDispatchState, shouldEscapeZeroDispatch, buildZeroDispatchResponse } from "./comboSkipEscape.ts";
-import { classify429, shouldInternalize429, buildPoolExhaustedResponse } from "./quota429Internalizer.ts";
-import { classifyTransient5xx } from "./transient5xxInternalizer.ts";
 import { reorderForCacheWarmth } from "./cacheAwareRetry.ts";
 
 /** A second in-flight copy of a body larger than this sits in the TLS send buffer. */
@@ -285,7 +283,7 @@ export async function dispatchWithCooldownRetry(opts: {
       // of cold switch at 100k+ context).
       if (setTry > 0 && state.orderedTargets.length > 1) {
         const prevAccount = state.comboErrors.length > 0
-          ? String((state.comboErrors[state.comboErrors.length - 1] as Record<string, unknown>)?.account ?? "")
+          ? String((state.comboErrors[state.comboErrors.length - 1] as unknown as Record<string, unknown>)?.account ?? "")
           : null;
         if (prevAccount) {
           const reordered = reorderForCacheWarmth(

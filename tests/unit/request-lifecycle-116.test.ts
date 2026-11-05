@@ -18,7 +18,6 @@ const {
 
 const T0 = 1_700_000_000_000; // arbitrary epoch ms
 
-function fakeNow(offset: number) { return T0 + offset; }
 
 test("#116 lifecycle: created in queued phase with correct metadata", () => {
   const lc = createLifecycle("req-1", { user: "tester", model: "glm-5.3", combo: "max", account: "nnd_001" });
@@ -114,8 +113,8 @@ test("#116 lifecycle: snapshot includes phase age and prediction info", () => {
 
 test("#116 lifecycle: instrumentation never throws even with bad input", () => {
   // null lifecycle — markPhase should not throw
-  try { markPhase(null as any, "completed"); } catch { assert.fail("markPhase threw on null"); }
-  try { markFailed(null as any, "x"); } catch { assert.fail("markFailed threw on null"); }
-  try { setDispatchInfo(null as any, {}); } catch { assert.fail("setDispatchInfo threw on null"); }
-  try { computePhaseBreakdown(null as any); } catch { assert.fail("computePhaseBreakdown threw on null"); }
+  try { markPhase(null as never, "completed"); } catch { assert.fail("markPhase threw on null"); }
+  try { markFailed(null as never, "x"); } catch { assert.fail("markFailed threw on null"); }
+  try { setDispatchInfo(null as never, {}); } catch { assert.fail("setDispatchInfo threw on null"); }
+  try { computePhaseBreakdown(null as never); } catch { assert.fail("computePhaseBreakdown threw on null"); }
 });

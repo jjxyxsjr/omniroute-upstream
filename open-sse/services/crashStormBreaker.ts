@@ -68,6 +68,13 @@ export function recordCrashFailure(
   const threshold = resolveThreshold();
   if (threshold <= 0) return;
   if (typeof status !== "number" || status < 500) return;
+  // nnd.41: hedge supersession (status 599 "Superseded by hedge sibling") is
+  // orchestration, not an upstream crash. Feeding it here tripped the breaker
+  // on a HEALTHY provider (2026-11-05 00:53: five hedge-cancels on glm-cn →
+  // CRASH_STORM_OPEN while sibling streams were succeeding), which pushed
+  // traffic onto quota-walled ark accounts and leaked raw 429s. Excluded by
+  // text, not by status — targetTimeoutRunner's null-body 599 stays counted.
+  if (/superseded by hedge/i.test(String(message ?? ""))) return;
   const signature = normalizeCrashSignature(message);
   if (!signature) return;
 

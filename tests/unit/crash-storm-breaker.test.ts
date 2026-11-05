@@ -56,6 +56,18 @@ test("only 5xx count — 429/403/400 never feed the breaker", () => {
   assert.equal(isCrashStorming("glm"), false);
 });
 
+test("nnd.41 hedge supersession (599 'Superseded by hedge sibling') is orchestration, not a crash", () => {
+  resetCrashStormBreaker();
+  // 2026-11-05 00:53 production shape: five hedge-cancels on healthy glm-cn
+  // tripped CRASH_STORM_OPEN and pushed traffic onto a monthly-walled ark
+  // account → raw 429 leak. Hedge supersession must never feed the breaker.
+  for (let i = 0; i < 50; i++) recordCrashFailure("glm-cn", "Superseded by hedge sibling", 599);
+  assert.equal(isCrashStorming("glm-cn"), false);
+  // targetTimeoutRunner's null-body 599 stays counted (real stall signal)
+  for (let i = 0; i < 10; i++) recordCrashFailure("glm-cn", "599", 599);
+  assert.equal(isCrashStorming("glm-cn"), true);
+});
+
 test("window decay: storm clears after the window drains", async () => {
   resetCrashStormBreaker();
   process.env.OMNIROUTE_CRASH_STORM_WINDOW_MS = "120";

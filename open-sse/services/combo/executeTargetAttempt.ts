@@ -897,6 +897,49 @@ export async function executeTargetAttempt(
     if (result.status === 429) {
       const remainingTargets = state.orderedTargets.length - state.fallbackCount - 1;
       const q429 = classify429(errorText, String(target.connectionId ?? ""), Math.max(0, remainingTargets));
+      // nnd.41: the early returns below skip the standard model-lockout path
+      // further down, so an internalized 429 left its target immediately
+      // re-dispatchable — a monthly-walled ark account got hit 3× in 12s
+      // (2026-11-05 00:53). Record the pacing lockout here — but ONLY for
+      // actionable classifications: a not-quota 429 falls through to the
+      // standard path, whose scoped/structured reset handling (e.g. Claude
+      // scoped quota locks) must not be shadowed by a generic lockout
+      // recorded first (combo lock tests pin this).
+      const mlSettings429 = resolveModelLockoutSettings(deps.settings);
+      if (
+        q429.kind !== "not-quota" &&
+        mlSettings429.enabled &&
+        mlSettings429.errorCodes.includes(429) &&
+        provider &&
+        target.connectionId
+      ) {
+        const quotaWall = q429.kind === "single-account" || q429.kind === "pool-exhausted";
+        let exactCooldownMs: number | null = null;
+        if (quotaWall) {
+          const resetAt =
+            q429.kind === "single-account" ? q429.resetAtMs : q429.earliestResetAt;
+          if (typeof resetAt === "number" && resetAt > Date.now()) {
+            // Honor the parsed upstream reset EXACTLY — a floor here would
+            // override scoped resets shorter than it (combo lock tests pin
+            // this; a 60s floor broke them). Only cap, per #7940 prose
+            // discipline. No reset info → leave null and let the standard
+            // quota_exhausted default (until-midnight) apply.
+            exactCooldownMs = Math.min(resetAt - Date.now(), 30 * 24 * 3_600_000);
+          }
+        } else if (q429.kind === "rate-limit" && q429.retryAfterMs && q429.retryAfterMs > 0) {
+          exactCooldownMs = Math.min(q429.retryAfterMs + 1_000, 10 * 60_000);
+        }
+        recordModelLockoutFailure(
+          provider,
+          target.connectionId,
+          rawModel,
+          quotaWall ? "quota_exhausted" : "rate_limited",
+          429,
+          mlSettings429.baseCooldownMs,
+          profile ?? null,
+          { exactCooldownMs, maxCooldownMs: mlSettings429.maxCooldownMs }
+        );
+      }
       if (shouldInternalize429(q429)) {
         deps.log.info("COMBO",
           `POOL_429_INTERNALIZED: ${q429.kind} on ${modelStr} (${String(errorText).slice(0, 80)}) — rotating to next target (${remainingTargets} remaining)`
