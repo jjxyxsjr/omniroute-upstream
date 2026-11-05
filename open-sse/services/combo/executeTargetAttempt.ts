@@ -944,9 +944,17 @@ export async function executeTargetAttempt(
         deps.log.info("COMBO",
           `POOL_429_INTERNALIZED: ${q429.kind} on ${modelStr} (${String(errorText).slice(0, 80)}) — rotating to next target (${remainingTargets} remaining)`
         );
-        // Mark as a normal failure so the combo advances to the next target
+        // Return contract (nnd.41b): {ok:false,response} in the speculative
+        // loop means FATAL — globalResolve(response) surfaces it to the
+        // client and aborts the combo. Advancing to the next target requires
+        // returning null with fallbackCount incremented (the model-lockout
+        // path below uses exactly this shape). The old `{ok:false,response:
+        // result}` here surfaced the raw wall-429 to users despite the
+        // internalize log (2026-11-05 12:03/12:24 leaks, both with
+        // "rotating to next target" logged immediately before).
         state.recordedAttempts++;
-        return { ok: false, response: result };
+        state.fallbackCount++;
+        return null;
       }
       if (q429.kind === "pool-exhausted") {
         const poolResp = buildPoolExhaustedResponse(deps.combo.name, q429.earliestResetAt);
@@ -964,8 +972,12 @@ export async function executeTargetAttempt(
         deps.log.info("COMBO",
           `TRANSIENT_5XX_INTERNALIZED: ${t5xx.reason} on ${modelStr} — retrying on next target`
         );
+        // Same return contract as the 429 internalize above (nnd.41b):
+        // null + fallbackCount++ advances the combo; {ok:false,response}
+        // would surface the raw 5xx as terminal.
         state.recordedAttempts++;
-        return { ok: false, response: result };
+        state.fallbackCount++;
+        return null;
       }
     }
 
