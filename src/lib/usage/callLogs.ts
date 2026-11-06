@@ -97,6 +97,10 @@ type CallLogSummaryRow = {
   connection_id: string | null;
   duration: number | null;
   ttft_ms: number | null;
+  /** nnd.42 (#223): wall-clock epoch of first upstream byte (audit trail). */
+  first_byte_at?: number | null;
+  /** nnd.42 (#223): wall-clock epoch of first forwarded chunk (audit trail). */
+  first_forward_at?: number | null;
   tokens_in: number | null;
   tokens_out: number | null;
   tokens_cache_read: number | null;
@@ -394,6 +398,8 @@ function mapSummaryRow(row: CallLogSummaryRow) {
     connectionId: row.connection_id,
     duration: toNumber(row.duration),
     ttft: row.ttft_ms != null ? toNumber(row.ttft_ms) : null,
+    firstByteAt: row.first_byte_at != null ? toNumber(row.first_byte_at) : null,
+    firstForwardAt: row.first_forward_at != null ? toNumber(row.first_forward_at) : null,
     tokens: {
       in: toNumber(row.tokens_in),
       out: toNumber(row.tokens_out),
@@ -650,6 +656,17 @@ async function buildCallLogRow(entry: any): Promise<PreparedCallLogRow> {
     // divides by duration - ttft so queueing/prefill wait does not drag the
     // reported generation rate down.
     ttftMs: toNullableTtftMs(entry.ttftMs ?? entry.ttft),
+    // nnd.42 (#223 TTFT audit): wall-clock epochs — first upstream byte vs
+    // first forwarded chunk. Written to the optional first_byte_at /
+    // first_forward_at columns (guarded like resilience_actions).
+    firstByteAt:
+      typeof entry.firstByteAt === "number" && Number.isFinite(entry.firstByteAt)
+        ? Math.round(entry.firstByteAt)
+        : null,
+    firstForwardAt:
+      typeof entry.firstForwardAt === "number" && Number.isFinite(entry.firstForwardAt)
+        ? Math.round(entry.firstForwardAt)
+        : null,
     tokensIn: toNumber(getLoggedInputTokens(entry.tokens)),
     tokensOut: toNumber(getLoggedOutputTokens(entry.tokens)),
     tokensCacheRead: getPromptCacheReadTokensOrNull(entry.tokens),
@@ -766,6 +783,10 @@ function insertCallLogRow(prepared: PreparedCallLogRow): void {
   // Optional column (migration 191) — only fixed identifiers are spliced in.
   const resilienceCol = hasResilienceColumn ? ", resilience_actions" : "";
   const resilienceParam = hasResilienceColumn ? ", @resilienceActions" : "";
+  // nnd.42 (#223): optional TTFT-audit epoch columns, same guarded pattern.
+  const hasEpochColumns = hasCallLogsColumn("first_byte_at");
+  const epochCol = hasEpochColumns ? ", first_byte_at, first_forward_at" : "";
+  const epochParam = hasEpochColumns ? ", @firstByteAt, @firstForwardAt" : "";
   const insertStmt = db.prepare(
     `
       INSERT INTO call_logs (
@@ -781,7 +802,7 @@ function insertCallLogRow(prepared: PreparedCallLogRow): void {
         has_request_body, has_response_body, has_pipeline_details, request_summary,
         correlation_id, model_pinned, session_tag, response_id, error_type, error_raw_head,
         video_content_removed, has_content, usage_provenance,
-        added_wait_ms, added_wait_cause${resilienceCol}
+        added_wait_ms, added_wait_cause${resilienceCol}${epochCol}
       )
       VALUES (
         @id, @timestamp, @method, @path, @status, @model, @requestedModel, @provider,
@@ -796,7 +817,7 @@ function insertCallLogRow(prepared: PreparedCallLogRow): void {
         @hasRequestBody, @hasResponseBody, @hasPipelineDetails, @requestSummary,
         @correlationId, @modelPinned, @sessionTag, @responseId, @errorType, @errorRawHead,
         @videoContentRemoved, @hasContent, @usageProvenance,
-        @addedWaitMs, @addedWaitCause${resilienceParam}
+        @addedWaitMs, @addedWaitCause${resilienceParam}${epochParam}
       )
     `
   );

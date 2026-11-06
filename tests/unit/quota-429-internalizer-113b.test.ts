@@ -95,11 +95,36 @@ test("#113B pool-exhausted response includes combo name and reset hint", () => {
   assert.equal(r.status, 429);
   assert.equal(r.code, "POOL_EXHAUSTED");
   assert.ok(r.message.includes("max"));
-  assert.ok(r.message.includes("min"));
-  assert.ok(r.message.includes("pool-level"), "explains it's pool-level, not per-account");
+  // nnd.42 wording: model-level truth (quota-walled candidates + UTC+8 reset)
+  // instead of the old misleading "Pool recovers ~…min" (see #216 note).
+  assert.ok(r.message.includes("quota-walled"), "says the candidates are quota-walled");
+  assert.ok(r.message.includes("UTC+8"), "reset shown in the requester's timezone");
+  assert.ok(r.message.includes("Other models may still be available"), "points at other models");
 });
 
 test("#113B pool-exhausted response handles null reset gracefully", () => {
   const r = buildPoolExhaustedResponse("pro", null);
   assert.ok(r.message.includes("cooling down"));
+});
+
+// ── nnd.42 additions ────────────────────────────────────────────────────────
+
+test("#113B nnd.42: ark burst-protection text → rate-limit (short backoff, never a wall)", () => {
+  const c = classify429(
+    "[429]: System protection triggered by request burst. Please slow down traffic growth and increase requests gradually before retrying. Request id: x",
+    "ark-13668996989",
+    5
+  );
+  assert.equal(c.kind, "rate-limit");
+});
+
+test("#113B nnd.42: GLM [1308] bare timestamp is Beijing local (lock PAST reset, never before)", () => {
+  // Production shape 2026-10-30: "您的限额将在 2026-10-30 18:50:24 重置" — no zone suffix.
+  // Old parser read it as UTC → lock ended 8h early (5h wall released before the wall).
+  const got = extractResetAtMs("[1308][已达到 5 小时的使用上限。您的限额将在 2026-10-30 18:50:24 重置。]");
+  assert.equal(got, Date.parse("2026-10-30T18:50:24+08:00"));
+});
+
+test("#113B nnd.42: Z-suffixed ISO stays UTC (regression guard for the +08:00 default)", () => {
+  assert.equal(extractResetAtMs("reset at 2026-11-04T16:01:23Z"), Date.parse("2026-11-04T16:01:23Z"));
 });

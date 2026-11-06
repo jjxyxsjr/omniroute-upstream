@@ -15,7 +15,7 @@ import {
 import { isEmptyContentResponse } from "../../services/errorClassifier.ts";
 import { incrementTokenUsage } from "../../services/geminiRateLimitTracker.ts";
 import { forgetClaudeThinkingForClientResponse } from "../../services/claudeThinkingStore.ts";
-import { requestTtftMs, streamEmittedOutput } from "../../utils/streamTiming.ts";
+import { requestTtftMs, streamEmittedOutput, streamTimingEpochs } from "../../utils/streamTiming.ts";
 import { readStreamPartialUsage } from "../../utils/streamPartialUsage.ts";
 import { clearPostOutputFailureStreak } from "../../services/accountFallback/postOutputFailureStreak.ts";
 import {
@@ -378,6 +378,11 @@ export async function runStreamingTail(deps: StreamingTailDeps) {
     partialUsage: streamPartialUsage,
   }) => {
     const ttft = requestTtftMs(streamTimingOriginOffsetMs, firstOutputMs);
+    // nnd.42 (#223): wall-clock epochs of first upstream byte / first forward
+    // for this attempt's stream — persisted alongside ttft so audits split
+    // "not yet accepted" vs "accepted-but-silent" per row. Nulls when the
+    // transform stream is absent (non-streaming) or nothing arrived.
+    const streamEpochs = streamTimingEpochs(transformStream);
     let normalizedStreamStatus = streamStatus || 200;
     if (streamCompletionRecorded) return;
     streamCompletionRecorded = true;
@@ -568,6 +573,9 @@ export async function runStreamingTail(deps: StreamingTailDeps) {
       // #13130: persist TTFT so call_logs.ttft_ms lets the dashboard compute
       // generation-time TPS instead of wall-clock TPS.
       ttft,
+      // nnd.42 (#223): first-byte / first-forward wall-clock epochs.
+      firstByteEpochMs: streamEpochs.firstByteEpochMs,
+      firstForwardEpochMs: streamEpochs.firstForwardEpochMs,
       reasoningMeta: streamReasoningMeta ?? null,
     });
 

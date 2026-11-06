@@ -313,6 +313,18 @@ export function ensureCallLogsColumns(db: SqliteDatabase) {
       db.exec("ALTER TABLE call_logs ADD COLUMN resilience_actions TEXT DEFAULT NULL");
       console.log("[DB] Added call_logs.resilience_actions column");
     }
+    // nnd.42 (#223 TTFT audit): wall-clock epochs for upstream first byte and
+    // first forwarded chunk — splits "accepted-but-silent" from "not yet
+    // accepted" on every logged request. Nullable; guarded by
+    // hasCallLogsColumn on insert like resilience_actions.
+    if (!columnNames.has("first_byte_at")) {
+      db.exec("ALTER TABLE call_logs ADD COLUMN first_byte_at INTEGER DEFAULT NULL");
+      console.log("[DB] Added call_logs.first_byte_at column");
+    }
+    if (!columnNames.has("first_forward_at")) {
+      db.exec("ALTER TABLE call_logs ADD COLUMN first_forward_at INTEGER DEFAULT NULL");
+      console.log("[DB] Added call_logs.first_forward_at column");
+    }
 
     db.exec(
       "CREATE INDEX IF NOT EXISTS idx_call_logs_requested_model ON call_logs(requested_model)"

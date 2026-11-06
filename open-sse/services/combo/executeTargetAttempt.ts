@@ -937,7 +937,18 @@ export async function executeTargetAttempt(
           429,
           mlSettings429.baseCooldownMs,
           profile ?? null,
-          { exactCooldownMs, maxCooldownMs: mlSettings429.maxCooldownMs }
+          {
+            exactCooldownMs,
+            maxCooldownMs: mlSettings429.maxCooldownMs,
+            // nnd.42: a wall 429 whose prose carried a FULL timestamp
+            // ("reset at 2026-11-09 00:00:00 +0800") is authoritative enough
+            // in this fork — honoring it past maxCooldownMs stops the
+            // 30-min re-hit loop (ark-13668996989 weekly wall: 17 re-hits
+            // over one day at 30-40min spacing, 2026-11-06). Rate limits and
+            // stampless walls keep the #7940 cap; the 30-day sanity ceiling
+            // above still bounds this path.
+            exactCooldownIsUpstreamReset: quotaWall && exactCooldownMs !== null,
+          }
         );
       }
       if (shouldInternalize429(q429)) {

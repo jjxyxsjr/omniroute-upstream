@@ -35,6 +35,8 @@ import { sseChunkCarriesOutput } from "./sseOutputSignal.ts";
 
 export interface StreamTiming {
   startedAt: number;
+  /** Wall-clock anchor (Date.now() at construction) backing the epoch accessors. */
+  wallAnchorEpochMs: number;
   firstByteAt: number | null;
   firstForwardAt: number | null;
   /** First forwarded chunk that carried text, reasoning or a tool call. */
@@ -59,6 +61,14 @@ export interface StreamTiming {
   markInterrupted(): void;
   /** First-forwarded-SSE-chunk latency in ms, or null if nothing was forwarded. */
   ttftMs(): number | null;
+  /**
+   * Wall-clock epoch (ms) when the first upstream byte arrived, or null.
+   * nnd.42: persisted to call_logs.first_byte_at for TTFT audit trails
+   * (#223) — "upstream accepted (headers/first byte) vs silent prefill".
+   */
+  firstByteEpochMs(): number | null;
+  /** Wall-clock epoch (ms) of the first forwarded SSE chunk, or null. */
+  firstForwardEpochMs(): number | null;
   /**
    * Time from stream start to the first forwarded chunk carrying output, or null when no
    * chunk carried any. Unlike ttftMs(), keepalive, role-only and lifecycle frames are skipped.
@@ -125,6 +135,23 @@ export function streamEmittedOutput(stream: object | null | undefined): boolean 
   return (timingByStream.get(stream)?.firstOutputAt ?? null) !== null;
 }
 
+/**
+ * nnd.42 (#223 TTFT audit): wall-clock epochs of the first upstream byte and
+ * the first forwarded chunk for a registered stream — the "accepted vs
+ * silent-prefill" split for call_logs. Nulls when the stream is unknown or
+ * never received/forwarded anything.
+ */
+export function streamTimingEpochs(
+  stream: object | null | undefined
+): { firstByteEpochMs: number | null; firstForwardEpochMs: number | null } {
+  const timing = stream ? timingByStream.get(stream) : undefined;
+  if (!timing) return { firstByteEpochMs: null, firstForwardEpochMs: null };
+  return {
+    firstByteEpochMs: timing.firstByteEpochMs(),
+    firstForwardEpochMs: timing.firstForwardEpochMs(),
+  };
+}
+
 export interface StreamTimingOptions {
   /**
    * #16927 opt-in (STREAM_LATE_OUTPUT_PROBE_ENABLED, resolved by the caller): past the first
@@ -150,6 +177,13 @@ export function createStreamTiming(options: StreamTimingOptions = {}): StreamTim
     sseChunkCarriesOutput(outputDecoder.decode(bytes));
   const timing: StreamTiming = {
     startedAt: performance.now(),
+    // Wall-clock anchor captured once at construction. The monotonic marks
+    // above must never be persisted directly (see docblock); these epoch
+    // accessors below project them onto wall time as anchor + delta. During
+    // an NTP step mid-stream the projection stays self-consistent (anchor is
+    // frozen at construction) — good enough for second-granularity audit
+    // trails (freeze-window alignment), which is their only consumer.
+    wallAnchorEpochMs: Date.now(),
     firstByteAt: null,
     firstForwardAt: null,
     firstOutputAt: null,
@@ -200,6 +234,12 @@ export function createStreamTiming(options: StreamTimingOptions = {}): StreamTim
     },
     ttftMs() {
       return this.firstForwardAt === null ? null : this.firstForwardAt - this.startedAt;
+    },
+    firstByteEpochMs() {
+      return this.firstByteAt === null ? null : this.wallAnchorEpochMs + (this.firstByteAt - this.startedAt);
+    },
+    firstForwardEpochMs() {
+      return this.firstForwardAt === null ? null : this.wallAnchorEpochMs + (this.firstForwardAt - this.startedAt);
     },
     firstOutputMs() {
       return this.firstOutputAt === null ? null : this.firstOutputAt - this.startedAt;

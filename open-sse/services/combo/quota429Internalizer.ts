@@ -46,6 +46,9 @@ const QUOTA_WALL_PATTERNS: Array<{ re: RegExp; label: string }> = [
 
 const RATE_LIMIT_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\[1302\].*速率限制/s, label: "glm_rate_limit" },
+  // nnd.42: ark's burst limiter (seen 2026-11-02 ×5) is a rate-limit 429 —
+  // short backoff + rotate, never a wall. Without this it fell to not-quota.
+  { re: /System protection triggered by request burst/is, label: "ark_burst_protection" },
   { re: /rate limit exceeded/is, label: "generic_rate_limit" },
   { re: /too many requests/is, label: "too_many_requests" },
 ];
@@ -55,20 +58,33 @@ const RATE_LIMIT_PATTERNS: Array<{ re: RegExp; label: string }> = [
  * nnd.41: ark walls carry a numeric UTC offset ("2026-11-20 23:59:59 +0800
  * CST") — the old parser treated the local wall clock as UTC, mis-timing
  * lockouts and pool-recovery hints by 8h.
+ * nnd.42: a stamp WITHOUT a zone suffix is a Beijing-local wall clock — GLM
+ * [1308] prose ("您的限额将在 2026-10-30 18:50:24 重置") ships bare +08:00
+ * local times. Treating them as UTC ended locks 8h EARLY (a 5h wall released
+ * before the wall itself). All our upstreams are CN vendors; on ambiguity,
+ * lock PAST the true reset, never before it (operator ruling 2026-11-06).
  */
 export function extractResetAtMs(errorText: string): number | null {
   const m = (errorText || "").match(
-    /(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(?:\s*([+-])(\d{2}):?(\d{2}))?/
+    /(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(Z?)(?:\s*([+-])(\d{2}):?(\d{2}))?/
   );
   if (!m) return null;
-  const base = new Date(m[1].replace(" ", "T") + (m[1].includes("T") ? "" : "Z")).getTime();
-  if (!Number.isFinite(base)) return null;
-  if (m[2]) {
-    // "+0800" = local is UTC+8 → UTC = local − 8h (and vice versa for "−").
-    const offsetMinutes = (parseInt(m[3], 10) * 60 + parseInt(m[4], 10)) * (m[2] === "+" ? -1 : 1);
+  if (m[2] === "Z") {
+    // ISO with trailing Z — already UTC.
+    const base = new Date(m[1].replace(" ", "T") + "Z").getTime();
+    return Number.isFinite(base) ? base : null;
+  }
+  if (m[3]) {
+    // Explicit zone: treat the wall clock as UTC then shift. "+0800" = local
+    // is UTC+8 → UTC = local − 8h (and vice versa for "−"). (nnd.41 logic.)
+    const base = new Date(m[1].replace(" ", "T") + "Z").getTime();
+    if (!Number.isFinite(base)) return null;
+    const offsetMinutes = (parseInt(m[4], 10) * 60 + parseInt(m[5], 10)) * (m[3] === "+" ? -1 : 1);
     return base + offsetMinutes * 60_000;
   }
-  return base;
+  // No zone suffix → Beijing-local wall clock (nnd.42, see docblock above).
+  const base = new Date(m[1].replace(" ", "T") + "+08:00").getTime();
+  return Number.isFinite(base) ? base : null;
 }
 
 export function classify429(
@@ -108,18 +124,24 @@ export function classify429(
 
 /**
  * Build the clean pool-exhausted 429 response (never raw upstream text).
+ * nnd.42 wording fix: the old text said `pool "max" is at capacity … Pool
+ * recovers ~<reset-of-the-WALLED-model's account>` — production evidence
+ * (2026-11-06 #216) showed both halves mislead: only the REQUESTED model's
+ * candidate accounts were walled (glm/hy4 were serving 200s the same
+ * second), and the quoted reset was the wall of one account, not the pool.
+ * Say what actually happened, in the requester's timezone.
  */
 export function buildPoolExhaustedResponse(
   comboName: string,
   earliestResetAt: number | null
 ): { status: number; code: string; message: string } {
   const resetHint = earliestResetAt
-    ? ` Pool recovers ~${new Date(earliestResetAt).toISOString().slice(11, 19)}Z (${Math.ceil((earliestResetAt - Date.now()) / 60_000)} min).`
-    : " Pool is cooling down; retry shortly.";
+    ? ` Earliest wall reset: ${new Date(earliestResetAt + 8 * 3_600_000).toISOString().slice(0, 16).replace("T", " ")} (UTC+8).`
+    : " Accounts are cooling down; retry shortly.";
   return {
     status: 429,
     code: "POOL_EXHAUSTED",
-    message: `Resource pool "${comboName}" is at capacity.${resetHint} This is a pool-level limit, not a per-account error — the gateway will auto-route to available accounts as they recover.`,
+    message: `Resource pool "${comboName}" has no available account for this request right now (all candidate accounts for this model are quota-walled).${resetHint} Other models may still be available — the gateway auto-routes as accounts recover.`,
   };
 }
 

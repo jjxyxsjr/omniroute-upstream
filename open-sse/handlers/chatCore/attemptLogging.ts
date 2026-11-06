@@ -262,6 +262,16 @@ export type PersistAttemptLogsArgs = {
    */
   ttft?: number | null;
   /**
+   * nnd.42 (#223 TTFT audit): wall-clock epochs from streamTiming projected
+   * onto Date.now() at construction — when the first upstream BYTE arrived
+   * (accepted/headers) and when the first chunk was FORWARDED downstream.
+   * Persisted to call_logs.first_byte_at / first_forward_at so any long TTFT
+   * splits into "not yet accepted" vs "accepted-but-silent prefill" from the
+   * row alone. Monotonic-clock internals never leave the process.
+   */
+  firstByteEpochMs?: number | null;
+  firstForwardEpochMs?: number | null;
+  /**
    * Encrypted-reasoning observation from the stream loops (flag + wall-clock
    * duration only). Efforts are read at the sink from the request bodies.
    */
@@ -602,6 +612,13 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
     connectionId: finalConnectionId || undefined,
     duration: Date.now() - startTime,
     ttftMs: typeof ttft === "number" && Number.isFinite(ttft) && ttft >= 0 ? ttft : null,
+    // nnd.42: TTFT audit epochs (#223) — null on non-streaming paths.
+    firstByteAt: typeof args.firstByteEpochMs === "number" && Number.isFinite(args.firstByteEpochMs)
+      ? Math.round(args.firstByteEpochMs)
+      : null,
+    firstForwardAt: typeof args.firstForwardEpochMs === "number" && Number.isFinite(args.firstForwardEpochMs)
+      ? Math.round(args.firstForwardEpochMs)
+      : null,
     // 2g-a: the nnd.31 rebuild dropped this entry-level field (only the
     // streamChunks copy survived), silencing queue_wait_ms for three days —
     // restored (#94). Lazily read so every error exit reports it too.
