@@ -37,11 +37,10 @@ import {
   resolveUsageProvenance,
 } from "./callContentProvenance";
 import { isNoLog } from "../compliance/noLog";
-import {
-  parseStoredPayload,
-  protectErrorPayloadForLog,
-  protectPayloadForLog,
-} from "../logPayloads";
+import { parseStoredPayload } from "../logPayloads";
+// nnd.42 ①: protectPayloadForLog / protectErrorPayloadForLog moved to the
+// artifact worker (callLogArtifactWorker.ts) — the main thread no longer
+// deep-clones big bodies here.
 import { pickDisplayValue } from "@/shared/utils/maskEmail";
 import { getCallLogsDir, type CallLogArtifact, type CallLogDetailState } from "./callLogArtifacts";
 import { closeCallLogArtifactWriter, writeCallArtifactAsync } from "./callLogArtifactWriter";
@@ -509,14 +508,23 @@ async function buildCallLogRow(entry: any): Promise<PreparedCallLogRow> {
   const connectionId = entry.connectionId || apiKeyContext?.connectionId || null;
   const noLogEnabled = Boolean(entry.noLog) || (apiKeyId ? isNoLog(apiKeyId) : false);
 
-  const protectedRequestBody = noLogEnabled ? null : protectPayloadForLog(entry.requestBody);
+  // nnd.42 ① (#212): the two big bodies are NO LONGER deep-cloned + sanitized
+  // on the main thread. That walk (structuredClone clone + 4 sanitize passes,
+  // then ANOTHER structured clone in postMessage) was the event-loop freeze —
+  // 9 stalls/day worst 120.3s with heap spikes to 441MB under 650k-token
+  // sessions (2026-11-06). The RAW bodies now cross to the artifact worker
+  // via the single postMessage structured clone, and the worker applies
+  // protectPayloadForLog / protectErrorPayloadForLog before serializing.
+  // Main-thread consumers below only need NULLNESS (has_* flags,
+  // detailExpected) — protect never turns a non-null payload into null, so
+  // the raw value carries the identical answer — and requestSummary reads the
+  // raw input (search-only, small; buildRequestSummary sanitizes its own
+  // output). Pipeline payloads stay synchronous here:
+  // seedPendingContinuationState must be callable before any await.
+  const rawRequestBody = noLogEnabled ? null : (entry.requestBody ?? null);
   const responseStatus = Number(entry.status);
   const failedResponse = Number.isFinite(responseStatus) && responseStatus >= 400;
-  const protectedResponseBody = noLogEnabled
-    ? null
-    : failedResponse
-      ? protectErrorPayloadForLog(entry.responseBody)
-      : protectPayloadForLog(entry.responseBody);
+  const rawResponseBody = noLogEnabled ? null : (entry.responseBody ?? null);
   const protectedPipelinePayloads = noLogEnabled
     ? null
     : protectPipelinePayloads(
@@ -713,11 +721,11 @@ async function buildCallLogRow(entry: any): Promise<PreparedCallLogRow> {
 
   const requestSummary = noLogEnabled
     ? null
-    : buildRequestSummary(logEntry.requestType, protectedRequestBody);
+    : buildRequestSummary(logEntry.requestType, rawRequestBody);
   const detailExpected =
     !noLogEnabled &&
-    (protectedRequestBody !== null ||
-      protectedResponseBody !== null ||
+    (rawRequestBody !== null ||
+      rawResponseBody !== null ||
       protectedError !== null ||
       protectedPipelinePayloads !== null);
 
@@ -752,8 +760,8 @@ async function buildCallLogRow(entry: any): Promise<PreparedCallLogRow> {
           ? entry.errorRawHead.slice(0, 512)
           : null,
     artifactSha256: null,
-    hasRequestBody: protectedRequestBody !== null ? 1 : 0,
-    hasResponseBody: protectedResponseBody !== null ? 1 : 0,
+    hasRequestBody: rawRequestBody !== null ? 1 : 0,
+    hasResponseBody: rawResponseBody !== null ? 1 : 0,
     resilienceActions,
     hasPipelineDetails: protectedPipelinePayloads ? 1 : 0,
     requestSummary,
@@ -767,10 +775,13 @@ async function buildCallLogRow(entry: any): Promise<PreparedCallLogRow> {
     responseId: typeof logEntry.responseId === "string" ? logEntry.responseId : null,
     buildDetailArtifact: detailExpected
       ? () =>
+          // nnd.42 ①: RAW bodies cross to the worker; sanitize happens there
+          // (see callLogArtifactWorker). Fidelity is byte-identical — the
+          // same protect chain runs, just off the request-serving thread.
           buildArtifact(
             logEntry,
-            protectedRequestBody,
-            protectedResponseBody,
+            rawRequestBody,
+            rawResponseBody,
             protectedError,
             protectedPipelinePayloads
           )

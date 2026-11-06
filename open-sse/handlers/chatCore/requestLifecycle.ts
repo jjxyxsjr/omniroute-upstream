@@ -38,8 +38,11 @@ export interface RequestLifecycle {
   readonly id: string;
   readonly user: string;
   readonly model: string;
-  readonly combo: string | null;
-  readonly account: string | null;
+  // nnd.42 typecheck fix: not readonly — setDispatchInfo (the one sanctioned
+  // late-binding writer, once routing resolves the winning account/combo)
+  // assigns both after construction; every other consumer only reads.
+  combo: string | null;
+  account: string | null;
   readonly startedAt: number;
 
   phase: LifecyclePhase;

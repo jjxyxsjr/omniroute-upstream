@@ -261,6 +261,8 @@ export type PersistAttemptLogsArgs = {
    * completions pass it; non-streaming paths leave it undefined (column NULL).
    */
   ttft?: number | null;
+  /** Legacy alias callers still pass (line 441 destructure, 587 consumer). */
+  ttftMs?: number | null;
   /**
    * nnd.42 (#223 TTFT audit): wall-clock epochs from streamTiming projected
    * onto Date.now() at construction — when the first upstream BYTE arrived
