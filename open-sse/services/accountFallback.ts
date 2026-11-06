@@ -92,6 +92,26 @@ export function retryHintBypassesMaxCooldownMs(
 ): boolean {
   return provenance === "header" || provenance === "google_rpc_retry_info";
 }
+
+/**
+ * nnd.42 ④ (fork divergence, same ruling as the combo-loop path in
+ * executeTargetAttempt): a wall 429 whose PROSE carried a full calendar
+ * reset ("…will reset at 2026-11-20 23:59:59 +0800 CST") is authoritative
+ * enough in this fork to bypass maxCooldownMs. Upstream #6863 deliberately
+ * caps prose hints; production 2026-11-06 22:31 showed the cost on this
+ * second lockout path — the ark monthly wall got capped back to 1800s and
+ * the 30-minute re-hit loop survived nnd.42's combo-path fix. Bounded by
+ * the same 30-day sanity ceiling used everywhere else; non-positive or
+ * non-finite hints never bypass.
+ */
+export function proseResetHintBypassesMaxCooldownMs(hintMs: number | null | undefined): boolean {
+  return (
+    typeof hintMs === "number" &&
+    Number.isFinite(hintMs) &&
+    hintMs > 0 &&
+    hintMs <= 30 * 24 * 3_600_000
+  );
+}
 import {
   isSubscriptionQuotaText,
   buildSubscriptionQuotaFallback,
@@ -628,7 +648,12 @@ export async function recordCoreOwnedAntigravityQuotaState({
           : (fallback.quotaResetHintMs ?? null),
       maxCooldownMs: profile.maxCooldownMs,
       scope: "exact",
-      exactCooldownIsUpstreamReset: retryHintBypassesMaxCooldownMs(fallback.retryHintSource),
+      // nnd.42 ④: prose wall resets bypass the cap here too (see
+      // proseResetHintBypassesMaxCooldownMs docblock — 2026-11-06 22:31
+      // production evidence: ark monthly wall re-capped to 1800s on this path).
+      exactCooldownIsUpstreamReset:
+        retryHintBypassesMaxCooldownMs(fallback.retryHintSource) ||
+        proseResetHintBypassesMaxCooldownMs(fallback.quotaResetHintMs),
     }
   );
   if (lockout.cooldownMs > 0 && isProviderExhaustedReason(fallback)) {

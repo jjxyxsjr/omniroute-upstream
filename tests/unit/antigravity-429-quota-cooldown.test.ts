@@ -229,8 +229,14 @@ test("core-owned Antigravity quota state applies the same provenance-aware cap",
     profileOverride: profile,
   });
   assert.equal(bodyResult.failureCount, 1);
+  // nnd.42 ④ (fork divergence): a prose reset hint with a parseable wall
+  // reset ("Resets in 131h") now BYPASSES maxCooldownMs — same ruling as the
+  // combo path (see proseResetHintBypassesMaxCooldownMs). Upstream #6863
+  // capped it; our production evidence (ark walls re-hit every 30min for a
+  // day) ruled prose resets trustworthy. Assert the honored value (~131h,
+  // 30-day sane ceiling bounds it), NOT the old cap.
   assert.ok(
-    bodyResult.cooldownMs > maxCooldownMs - 5_000 && bodyResult.cooldownMs <= maxCooldownMs
+    bodyResult.cooldownMs > 130 * 60 * 60_000 && bodyResult.cooldownMs <= 131 * 60 * 60_000
   );
 
   const headerResult = await recordCoreOwnedAntigravityQuotaState({

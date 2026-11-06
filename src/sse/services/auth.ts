@@ -90,6 +90,7 @@ import {
   getRuntimeProviderProfile,
   recordModelLockoutFailure,
   retryHintBypassesMaxCooldownMs,
+  proseResetHintBypassesMaxCooldownMs,
   isProviderModelUnsupported400,
 } from "@omniroute/open-sse/services/accountFallback.ts";
 import { copilotRejectionFlag, lockCopilotModelNotSupported } from "./copilotModelNotSupportedLock";
@@ -3010,9 +3011,14 @@ export async function markAccountUnavailable(
           scope: usesExactAntigravityLock ? "exact" : undefined,
           // Only a transport header, google.rpc.RetryInfo, or cached Claude reset can bypass
           // maxCooldownMs. Prose and generic JSON hints remain exact but operator-capped.
+          // nnd.42 ④ (fork divergence): prose wall resets carrying a full
+          // calendar timestamp also bypass — same ruling as the combo path
+          // (2026-11-06 22:31: ark monthly wall re-capped to 1800s here,
+          // keeping the 30-min re-hit loop alive after nnd.42's combo fix).
           exactCooldownIsUpstreamReset:
             retryHintBypassesMaxCooldownMs(fallbackResult.retryHintSource) ||
-            isModelScopedClaudeQuota,
+            isModelScopedClaudeQuota ||
+            proseResetHintBypassesMaxCooldownMs(fallbackResult.quotaResetHintMs),
         }
       );
       // Update last error for observability (without changing terminal status)
