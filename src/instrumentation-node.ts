@@ -611,6 +611,25 @@ export async function registerNodejs(): Promise<void> {
     console.warn("[STARTUP] Could not clear stale crash cooldowns (non-fatal):", msg);
   }
 
+  // nnd.42c (#224): replay still-future quota-wall lockouts. modelLockouts is
+  // in-memory and every restart wipes it — without this replay the first real
+  // request after the daily restart re-hits each walled account once. Sister
+  // of clearStaleCrashCooldowns above (that one clears transient junk; this
+  // one re-arms durable walls). Non-fatal: a failed restore only costs the
+  // one re-hit the old behavior already paid.
+  try {
+    const { restoreQuotaWallLockoutsFromHistory } = await import(
+      "@/sse/services/quotaWallLockRestore"
+    );
+    const restored = restoreQuotaWallLockoutsFromHistory();
+    if (restored > 0) {
+      console.log(`[STARTUP] Restored ${restored} quota-wall lockout(s) from history (#224)`);
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[STARTUP] Could not restore quota-wall lockouts (non-fatal):", msg);
+  }
+
   await scanComboModelNameCollisionsAtBoot();
   await warmAdaptiveVirtualLanesIntoRuntime();
 

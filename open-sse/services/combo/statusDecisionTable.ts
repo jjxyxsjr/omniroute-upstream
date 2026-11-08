@@ -14,6 +14,11 @@ export const COMBO_400_STOP_ROWS: ReadonlyArray<{ id: string; pattern: RegExp }>
   { id: "context-shape", pattern: /\bcontext\b/i },
   { id: "prompt-shape", pattern: /\bprompt\b/i },
   { id: "token-shape", pattern: /\btoken\b/i },
+  // nnd.42c (#226): GLM [1301] content-moderation refusals judge the REQUEST
+  // CONTENT, not the account — rotating only burns sibling accounts on the
+  // same guaranteed rejection (2026-11-07T09:39Z: 7 accounts fanned in 6.6s
+  // before surfacing). Surface on first refusal, like the rows above.
+  { id: "glm-content-moderation-1301", pattern: /\[1301\]|不安全或敏感内容/ },
 ];
 
 /**

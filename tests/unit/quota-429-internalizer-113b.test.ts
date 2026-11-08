@@ -128,3 +128,11 @@ test("#113B nnd.42: GLM [1308] bare timestamp is Beijing local (lock PAST reset,
 test("#113B nnd.42: Z-suffixed ISO stays UTC (regression guard for the +08:00 default)", () => {
   assert.equal(extractResetAtMs("reset at 2026-11-04T16:01:23Z"), Date.parse("2026-11-04T16:01:23Z"));
 });
+
+test("#226 nnd.42c: GLM [1301] content moderation is a body-specific STOP (no account fan-out)", async () => {
+  const { comboTargetDecision } = await import("../../open-sse/services/combo/statusDecisionTable.ts");
+  const glm1301 = "[400]: [1301][系统检测到输入或生成内容可能包含不安全或敏感内容，请您避免输入易产生敏感内容的提示语，感谢您的配合。][20261107173925164708c43cf34cea]";
+  assert.equal(comboTargetDecision(400, glm1301), "stop");
+  // Unrelated 400s still advance (no blanket rule).
+  assert.equal(comboTargetDecision(400, "model xyz not supported"), "advance");
+});
