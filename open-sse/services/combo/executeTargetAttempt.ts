@@ -148,6 +148,27 @@ export async function executeTargetAttempt(
     });
 
   const familyTried = new Set<string>();
+  // nnd.42d (#224 residual): never dispatch INTO an active model lockout. The
+  // wall lock (locked-until-reset) and the dispatch loop lived on different
+  // shelves — the retry-loop gate checks isModelLocked, but the MAIN dispatch
+  // path did not, so a walled account still got dispatched ~once per restart
+  // era (2026-11-08T14:03/15:09: locks on file for 12d/51min, still dispatched,
+  // 429 re-hit + 8-9s rotation). Same advance contract as the internalized
+  // 429 path: null + fallbackCount++ moves to the next target (nnd.41b).
+  if (provider && rawModel && target.connectionId && isModelLocked(provider, target.connectionId, rawModel)) {
+    deps.log.info("COMBO",
+      `Skipping ${modelStr} — locked (wall/cooldown active), pre-dispatch (#224)`
+    );
+    recordComboDecision(deps.traceInvocationId, {
+      step: target.executionKey,
+      target: modelStr,
+      decision: "skipped_before_dispatch",
+      reason: "model_lockout",
+    });
+    state.recordedAttempts++;
+    state.fallbackCount++;
+    return null;
+  }
   // #16438 opt-in (EMPTY_STREAM_SIBLING_RECOVERY_ENABLED): an empty_content turn spends
   // this loop's existing retry on a sibling connection with no lockout. Off = release path.
   const emptyStreamSiblingRecovery = isEmptyStreamSiblingRecoveryEnabled();
