@@ -179,6 +179,17 @@ export type ModelLockoutEntry = {
   failureCount: number;
   lastFailureAt: number;
   resetAfterMs: number;
+  /**
+   * nnd.43 #188-A (iid 224): `until` came from an authoritative upstream reset
+   * declaration (prose wall "…will reset at …", Retry-After / X-RateLimit-Reset
+   * headers, google.rpc.RetryInfo — whatever recordModelLockoutFailure accepted
+   * under exactCooldownIsUpstreamReset), not from exponential backoff or a
+   * synthetic estimate. A later success must not clear such a lock before its
+   * declared instant — one 200 (especially a 1-token test probe a wall lets
+   * through) does not reopen a wall the upstream says stands for N more days.
+   * See clearModelLockExemptingUpstreamResets.
+   */
+  upstreamReset?: boolean;
 };
 export type ModelFailureState = {
   failureCount: number;
@@ -805,6 +816,9 @@ export function lockModel(
     failureCount: metadata.failureCount ?? existing?.failureCount ?? 1,
     lastFailureAt: metadata.lastFailureAt ?? now,
     resetAfterMs: metadata.resetAfterMs ?? existing?.resetAfterMs ?? 0,
+    // nnd.43 #188-A: keep a prior upstream-reset stamp when a shorter re-lock
+    // overwrites the entry — the wall declaration outlives the new cooldown.
+    upstreamReset: metadata.upstreamReset ?? existing?.upstreamReset,
   });
 }
 
@@ -904,6 +918,15 @@ export function recordModelLockoutFailure(
           ),
           maxCooldownMs ?? BACKOFF_CONFIG.max
         );
+  // nnd.43 #188-A: stamp the entry when the applied cooldown IS the declared
+  // upstream reset, uncapped (value equality also excludes the synthetic
+  // until-midnight default injected above, which keeps its estimate nature).
+  // A later success keeps stamped locks alive until their instant — see
+  // clearModelLockExemptingUpstreamResets.
+  const cooldownIsUpstreamReset =
+    options.exactCooldownIsUpstreamReset === true &&
+    typeof options.exactCooldownMs === "number" &&
+    cooldownMs === options.exactCooldownMs;
 
   modelFailureState.set(key, {
     failureCount,
@@ -917,6 +940,7 @@ export function recordModelLockoutFailure(
     failureCount,
     lastFailureAt: now,
     resetAfterMs,
+    upstreamReset: cooldownIsUpstreamReset,
   });
 
   return {
@@ -933,6 +957,29 @@ export function clearModelLock(
 ): boolean {
   if (!model) return false;
   return exactModelLock.clearMultiKeyLock(
+    modelLockouts,
+    modelFailureState,
+    getModelLockKeys(provider, connectionId, model)
+  );
+}
+
+/**
+ * nnd.43 #188-A (iid 224 root fix): success-path clearModelLock that keeps a
+ * wall lock alive. A request succeeding does not mean the quota wall is gone —
+ * upstream walls let small/test requests through while still rejecting real
+ * traffic — so lockouts stamped `upstreamReset` (prose wall reset, Retry-After
+ * header, RetryInfo) stay until their declared instant; every other lock
+ * clears exactly as before. Same spirit as the connection-test route's
+ * future-rate_limited_until rule: a 429 handler's forward statement is not
+ * overruled by a poller or a single 200.
+ */
+export function clearModelLockExemptingUpstreamResets(
+  provider: string,
+  connectionId: string,
+  model: string | null | undefined
+): boolean {
+  if (!model) return false;
+  return exactModelLock.clearMultiKeyLockExemptingUpstreamResets(
     modelLockouts,
     modelFailureState,
     getModelLockKeys(provider, connectionId, model)

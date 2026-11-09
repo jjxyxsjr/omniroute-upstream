@@ -82,6 +82,9 @@ export function computeExactModelLockEntry(
     failureCount: metadata.failureCount ?? existing?.failureCount ?? 1,
     lastFailureAt: metadata.lastFailureAt ?? now,
     resetAfterMs: metadata.resetAfterMs ?? existing?.resetAfterMs ?? 0,
+    // nnd.43 #188-A: keep a prior upstream-reset stamp when a longer re-lock
+    // overwrites the entry; new stamps come from recordModelLockoutFailure.
+    upstreamReset: metadata.upstreamReset ?? existing?.upstreamReset,
   };
 }
 
@@ -96,6 +99,30 @@ export function clearMultiKeyLock(
 ): boolean {
   let cleared = false;
   for (const key of keys) {
+    cleared = modelLockouts.delete(key) || cleared;
+    cleared = modelFailureState.delete(key) || cleared;
+  }
+  return cleared;
+}
+
+/**
+ * nnd.43 #188-A (iid 224) success-decay variant of clearMultiKeyLock: an entry
+ * stamped `upstreamReset` whose declared instant is still in the future is
+ * KEPT — the upstream's reset declaration is a forward statement one success
+ * (especially a 1-token test probe the wall lets through) may not overrule.
+ * Unstamped entries and stamped entries already past their instant clear
+ * exactly as before.
+ */
+export function clearMultiKeyLockExemptingUpstreamResets(
+  modelLockouts: Map<string, ModelLockoutEntry>,
+  modelFailureState: Map<string, ModelFailureState>,
+  keys: string[],
+  now = Date.now()
+): boolean {
+  let cleared = false;
+  for (const key of keys) {
+    const entry = modelLockouts.get(key);
+    if (entry?.upstreamReset && entry.until > now) continue; // wall still stands
     cleared = modelLockouts.delete(key) || cleared;
     cleared = modelFailureState.delete(key) || cleared;
   }

@@ -26,7 +26,7 @@ import {
 import { resolveClientApiKey } from "../services/clientApiKeyResolver";
 import {
   getRuntimeProviderProfile,
-  clearModelLock,
+  clearModelLockExemptingUpstreamResets,
   recordModelLockoutFailure,
   isDailyQuotaExhausted,
 } from "@omniroute/open-sse/services/accountFallback.ts";
@@ -2366,8 +2366,23 @@ async function handleSingleModelChat(
       });
 
       if (result.success) {
-        clearModelLock(provider, credentials.connectionId, model);
-        markQuotaHealthy(credentials.connectionId);
+        // nnd.43 #188 (iid 224 white-hit root fix A+B): a successful request
+        // does not erase a quota wall the upstream declared open until a
+        // future instant. A: keep upstream-reset lockouts (prose wall
+        // "…will reset at …", Retry-After, RetryInfo) until their declared
+        // expiry — everything else clears as before. B: an internal test
+        // probe (x-internal-test: combo-health-check — the model/combo/
+        // connection live tests route through this handler) proves the
+        // credential answers, not that the quota window reopened, so it
+        // clears no lockout and never marks quota healthy — the same ruling
+        // the connection-test route applies to a future rate_limited_until:
+        // no poller may overrule a 429 handler's forward statement.
+        const isInternalTestProbe =
+          request?.headers?.get?.("x-internal-test") === "combo-health-check";
+        if (!isInternalTestProbe) {
+          clearModelLockExemptingUpstreamResets(provider, credentials.connectionId, model);
+          markQuotaHealthy(credentials.connectionId);
+        }
         // Acquired probes were settled inside execute(); other successes settle here or in combo.
         if (
           !wasProviderProbe &&
