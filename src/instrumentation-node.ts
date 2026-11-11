@@ -877,6 +877,18 @@ export async function registerNodejs(): Promise<void> {
           console.warn("[STARTUP] Connection recovery scheduler failed to start (non-fatal):", msg);
         }),
 
+      // nnd.44 ①a (iid 231 track B): native window-anchor guard — plans the
+      // GLM 5h-window blackout (ISO rate_limited_until until 05:55 BJ) during
+      // the nightly action window so idle accounts anchor their window at 06:00
+      // instead of burning it in the small hours. Self-gates to the window; the
+      // host cron stays deployed as a second line of defense.
+      import("@/sse/services/windowAnchorGuard")
+        .then((m) => m.initWindowAnchorGuardScheduler())
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn("[STARTUP] Window anchor guard failed to start (non-fatal):", msg);
+        }),
+
       // Context-window self-correction (5004): periodically reconcile provider-declared
       // windows (from /models discovery) into auto:discovery overrides. Never fatal.
       import("@/lib/contextWindowResolver")

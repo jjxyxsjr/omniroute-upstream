@@ -2465,6 +2465,32 @@ export function cooldownUntilMs(value: string | number | Date | null | undefined
 }
 
 /**
+ * nnd.44 ①b/①c/③ (iid 231/213): is this `rate_limited_until` value a PLANNED
+ * blackout / operator-manual lock, by its raw ENCODING alone?
+ *
+ * The column carries two encodings (see cooldownUntilMs): numeric epoch ms is
+ * what the real-429 paths persist (setConnectionRateLimitUntil), while
+ * ISO-8601 strings are what windowAnchorGuard (planned blackout) and the
+ * dashboard AUTH path (operator manual) persist. The transient-rate-limit
+ * exemption (transientRateLimitedProviders → allowRateLimitedConnections) and
+ * the last-resort dispatcher must NEVER bypass an ISO value — a planned
+ * blackout is an operator decision about the calendar, not a retryable
+ * upstream condition — while a numeric epoch cooldown stays exemptable.
+ *
+ * Discriminates via COOLDOWN_NUMERIC_RE (numeric incl. decimal tails) on the
+ * raw value: numeric/number → false; parseable ISO → true; anything
+ * unparseable → false (callers keep their legacy fail-open behavior).
+ */
+export function isPlannedBlackoutRateLimitedUntil(
+  value: string | number | Date | null | undefined | unknown
+): boolean {
+  if (typeof value !== "string") return false;
+  const raw = value.trim();
+  if (raw === "" || COOLDOWN_NUMERIC_RE.test(raw)) return false;
+  return Number.isFinite(Date.parse(raw));
+}
+
+/**
  * Check if account is currently unavailable (cooldown not expired)
  */
 export function isAccountUnavailable(unavailableUntil: string | Date | null | undefined): boolean {

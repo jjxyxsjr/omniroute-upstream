@@ -50,6 +50,55 @@ export function setConnectionRateLimitUntil(connectionId: string, until: number 
 }
 
 /**
+ * nnd.44 ①a (iid 231): write a PLANNED blackout as an ISO-8601 string.
+ *
+ * Encoding is the discriminator: real 429s persist epoch-ms numerics via
+ * setConnectionRateLimitUntil above, so anything numeric parses as an upstream
+ * cooldown, while this ISO shape marks "planned blackout / operator manual"
+ * (isPlannedBlackoutRateLimitedUntil in open-sse accountFallback.ts keys off
+ * exactly that split — the transient-rate-limit exemption and the last-resort
+ * selector of this batch both refuse to bypass ISO values).
+ *
+ * Write discipline (host-script glm-anchor-guard.js parity):
+ *   - only EXTENDS: returns false without writing when the row already carries
+ *     a cooldown at or beyond `untilIso` (a longer real-429 lock stays put);
+ *   - writes last_error = label for operators, but NEVER last_error_type or
+ *     test_status — quota pollers (maybeClearRecoveredQuotaState) key on those
+ *     and must not lift the planned blackout early;
+ *   - idempotent: re-running with the same target writes the same row.
+ *
+ * Best-effort and never throws. Returns true when the row was written.
+ */
+export function setConnectionPlannedBlackoutUntil(
+  connectionId: string,
+  untilIso: string,
+  label: string
+): boolean {
+  if (typeof connectionId !== "string" || connectionId.length === 0) return false;
+  const targetMs = Date.parse(untilIso);
+  if (!Number.isFinite(targetMs) || targetMs <= Date.now()) return false;
+  const db = getDbInstance() as unknown as DbLike;
+  try {
+    const row = db
+      .prepare("SELECT rate_limited_until FROM provider_connections WHERE id = ?")
+      .get(connectionId) as { rate_limited_until?: string | number | null } | undefined;
+    if (!row) return false;
+    const current = parseCooldownUntilMs(row.rate_limited_until ?? null);
+    if (current !== null && current >= targetMs) return false;
+    db.prepare(
+      `UPDATE provider_connections
+       SET rate_limited_until = ?, last_error = ?, updated_at = ?
+       WHERE id = ?`
+    ).run(untilIso, label, new Date().toISOString(), connectionId);
+    // Routing-only write — same cache discipline as setConnectionRateLimitUntil.
+    invalidateDbCache("connections", connectionId, { skipModelCatalog: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Mark a connection as rate-limited until `Date.now() + retryAfterMs`.
  *
  * Best-effort: never throws — a DB failure must not crash the chat path. The T05

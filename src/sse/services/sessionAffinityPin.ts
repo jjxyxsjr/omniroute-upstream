@@ -40,6 +40,7 @@ import { isAccountQuotaExhausted } from "@/domain/quotaCache";
 import {
   isAccountUnavailable,
   isModelLocked,
+  isPlannedBlackoutRateLimitedUntil,
 } from "@omniroute/open-sse/services/accountFallback.ts";
 import { isComboPerModelTimeoutAbort } from "@omniroute/open-sse/services/combo/comboAbortReasons.ts";
 import * as log from "../utils/logger";
@@ -498,7 +499,14 @@ function isConnectionEligibleForAffinityPin(
     return false;
   }
   if (!allowSuppressed) {
-    if (!allowRateLimited && isAccountUnavailable(connection.rateLimitedUntil)) return false;
+    // nnd.44 ①b: planned blackouts (ISO encoding) refuse the transient
+    // exemption; real-429 numeric cooldowns keep it (see auth.ts filter).
+    if (
+      isAccountUnavailable(connection.rateLimitedUntil) &&
+      (!allowRateLimited || isPlannedBlackoutRateLimitedUntil(connection.rateLimitedUntil))
+    ) {
+      return false;
+    }
     if (params.isTerminalConnectionStatus(connection)) return false;
     if (provider === "codex" && params.isCodexScopeUnavailable(connection, requestedModel)) {
       return false;
@@ -567,7 +575,14 @@ export function resolveForcedConnectionForCredentialPool(
   const forcedConn = params.connections.find((conn) => conn.id === forced);
   if (!forcedConn) return null;
 
-  if (!params.allowRateLimitedConnections && isAccountUnavailable(forcedConn.rateLimitedUntil)) {
+  if (
+    isAccountUnavailable(forcedConn.rateLimitedUntil) &&
+    // nnd.44 ①b: ISO-encoded (planned blackout / operator manual) cooldowns
+    // refuse the transient exemption even when it is flagged on — numeric
+    // epoch cooldowns (real 429s) keep it. Same ruling as the auth.ts filter.
+    (!params.allowRateLimitedConnections ||
+      isPlannedBlackoutRateLimitedUntil(forcedConn.rateLimitedUntil))
+  ) {
     return null;
   }
   if (params.isQuotaExhausted(forced)) return null;

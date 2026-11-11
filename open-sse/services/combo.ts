@@ -12,6 +12,7 @@ import { runComboWithSafetyLatch } from "./combo/safetyStopLatch.ts";
 
 import { recordComboFailure } from "./combo/failureTracker.ts";
 import { buildRecoveryHint } from "./combo/pinRecovery.ts";
+import { buildPlannedBlackoutResponse } from "./combo/plannedBlackoutGate.ts";
 import { buildTargetTimeoutRunner } from "./combo/targetTimeoutRunner.ts";
 import { costKey, resolvePoolCosts } from "./combo/candidateCost.ts";
 import { getComboMetrics } from "./comboMetrics.ts";
@@ -1109,6 +1110,15 @@ async function handleComboChatInner({
     recordComboFailure(effectiveSessionId, combo.name);
     // #11371: same early-exit release as the pinned-turn path above.
     targetResolution.quotaShareRelease?.();
+    // nnd.44 ①c (iid 231 track C): a pool emptied by a PLANNED blackout (ISO
+    // rate_limited_until — windowAnchorGuard or operator manual) must answer a
+    // retryable 429 with the recovery moment, not a model_not_found 404. The
+    // auto-strategy candidate filter drops cooled connections BEFORE this exit,
+    // so during the 00:55–05:55 anchor blackout a glm-only combo flashed 404
+    // and clients hard-failed. Real-429 numeric cooldowns keep the legacy 404
+    // (the attempt loop's honest-gate exit already covers gate-level skips).
+    const plannedBlackoutResponse = await buildPlannedBlackoutResponse(combo);
+    if (plannedBlackoutResponse) return plannedBlackoutResponse;
     return errorResponseWithComboDiagnostics(
       404,
       "Combo has no executable targets",

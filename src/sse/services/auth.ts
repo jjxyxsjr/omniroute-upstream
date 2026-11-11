@@ -92,6 +92,7 @@ import {
   retryHintBypassesMaxCooldownMs,
   proseResetHintBypassesMaxCooldownMs,
   isProviderModelUnsupported400,
+  isPlannedBlackoutRateLimitedUntil,
 } from "@omniroute/open-sse/services/accountFallback.ts";
 import { copilotRejectionFlag, lockCopilotModelNotSupported } from "./copilotModelNotSupportedLock";
 import { isSharedWalletCredits402 } from "@omniroute/open-sse/services/accountFallback/sharedWalletCredits.ts";
@@ -1421,7 +1422,20 @@ export async function getProviderCredentials(
         return false;
       }
       if (!allowSuppressedConnections && explicitProbeKind !== "probe") {
-        if (!allowRateLimitedConnections && isAccountUnavailable(c.rateLimitedUntil)) {
+        // nnd.44 ①b (iid 231): the transient-rate-limit exemption
+        // (transientRateLimitedProviders → allowRateLimitedConnections) exists so a
+        // mid-request REAL 429 (numeric epoch cooldown) does not strand the
+        // provider's remaining healthy seats. A PLANNED blackout — raw ISO
+        // encoding, written by windowAnchorGuard or the operator dashboard — is
+        // calendar policy about when this account may take traffic at all, so it
+        // must refuse the exemption regardless of the flag. Numeric/absent
+        // cooldowns keep the exemption exactly as before.
+        const plannedBlackoutDeniesExemption =
+          allowRateLimitedConnections && isPlannedBlackoutRateLimitedUntil(c.rateLimitedUntil);
+        if (
+          isAccountUnavailable(c.rateLimitedUntil) &&
+          (!allowRateLimitedConnections || plannedBlackoutDeniesExemption)
+        ) {
           connectionFilterStatus.set(c.id, "rateLimited");
           return false;
         }
