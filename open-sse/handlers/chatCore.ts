@@ -3346,6 +3346,10 @@ async function handleChatCoreInner({
     semanticCacheEnabled,
     skillRequestId,
     startTime,
+    // nnd.44 ②-fix (#227): live dispatch-moment anchor — persisted as
+    // call_logs.first_forward_at. Read at stream completion so late
+    // (re)dispatches inside tool loops stamp the FINAL leg's moment.
+    getUpstreamDispatchedAt: () => upstreamDispatchedAt,
     stream,
     streamController,
     streamUserAgent,

@@ -91,6 +91,14 @@ export interface StreamTiming {
   firstByteEpochMs(): number | null;
   /** Wall-clock epoch (ms) of the first forwarded SSE chunk, or null. */
   firstForwardEpochMs(): number | null;
+  /**
+   * Wall-clock epoch (ms) of the first OUTPUT event — the #29 ttft source
+   * (first forwarded chunk carrying text, reasoning or a tool call). Persisted
+   * to call_logs.first_byte_at (nnd.44 ②-fix ruling: the audit split is
+   * dispatch → first output, two DIFFERENT events, so the columns can never
+   * collapse onto one instant again).
+   */
+  firstOutputEpochMs(): number | null;
   /** Wall-clock epoch (ms) of the first forwarded chunk carrying content, or null. */
   firstContentEpochMs(): number | null;
   /**
@@ -183,12 +191,20 @@ export function streamEmittedOutput(stream: object | null | undefined): boolean 
  */
 export function streamTimingEpochs(
   stream: object | null | undefined
-): { firstByteEpochMs: number | null; firstForwardEpochMs: number | null } {
+): {
+  firstByteEpochMs: number | null;
+  firstForwardEpochMs: number | null;
+  /** #29 ttft-source epoch (first output event) — nnd.44 ②-fix audit source. */
+  firstOutputEpochMs: number | null;
+} {
   const timing = stream ? timingByStream.get(stream) : undefined;
-  if (!timing) return { firstByteEpochMs: null, firstForwardEpochMs: null };
+  if (!timing) {
+    return { firstByteEpochMs: null, firstForwardEpochMs: null, firstOutputEpochMs: null };
+  }
   return {
     firstByteEpochMs: timing.firstByteEpochMs(),
     firstForwardEpochMs: timing.firstForwardEpochMs(),
+    firstOutputEpochMs: timing.firstOutputEpochMs(),
   };
 }
 
@@ -229,12 +245,12 @@ export function createStreamTiming(options: StreamTimingOptions = {}): StreamTim
   const skippedSinceProbe: SkippedChunk[] = [];
   const carriesOutput = (bytes: Uint8Array): boolean =>
     sseChunkCarriesOutput(outputDecoder.decode(bytes));
-  // nnd.44 ②b: CONTENT probe state — same stride/backfill pattern as the output
-  // probe above, but reasoning placeholders never satisfy it. Deep-think streams
-  // can run hundreds of reasoning-only frames before the first content delta.
+  // nnd.44 ②b: CONTENT probe state — reasoning placeholders never satisfy
+  // it; deep-think streams can run hundreds of reasoning-only frames before
+  // the first content delta, so past the early window every frame is probed
+  // (cheap via the prefilter, see observeContent).
   const contentDecoder = new TextDecoder();
   let contentProbed = 0;
-  const skippedSinceContentProbe: SkippedChunk[] = [];
   const carriesContent = (bytes: Uint8Array): boolean =>
     sseChunkCarriesContent(contentDecoder.decode(bytes));
   const timing: StreamTiming = {
@@ -303,28 +319,14 @@ export function createStreamTiming(options: StreamTimingOptions = {}): StreamTim
     },
     observeContent(bytes) {
       if (this.firstContentAt !== null) return;
-      const probed = contentProbed;
-      if (probed < MAX_OUTPUT_PROBES) {
-        contentProbed += 1;
-        if (carriesContent(bytes)) this.firstContentAt = performance.now();
-        return;
-      }
-      // Stride past the window even without the #16927 flag: reasoning prefixes
-      // are exactly the case where content starts beyond the early window, and
-      // first_content_at is an audit scalar, not a hot-path decision input.
       contentProbed += 1;
-      const at = performance.now();
-      if (probed % OUTPUT_PROBE_STRIDE !== 0) {
-        skippedSinceContentProbe.push({ bytes, at });
-        return;
-      }
-      if (!carriesContent(bytes)) {
-        skippedSinceContentProbe.length = 0;
-        return;
-      }
-      const earliest = skippedSinceContentProbe.find((chunk) => carriesContent(chunk.bytes));
-      skippedSinceContentProbe.length = 0;
-      this.firstContentAt = earliest ? earliest.at : at;
+      // Past the 64-frame early window, probe EVERY frame — sseChunkCarries-
+      // Content's substring prefilter (nnd.44 ②-fix) makes a negative probe
+      // ~one decode + one includes(), so a deep-think prefix costs almost
+      // nothing while a short content burst between stride probes can never
+      // be missed again (the 1-in-16 stride form shipped in ② missed exactly
+      // that: live trial 2026-11-11 18:13, first_content_at NULL).
+      if (carriesContent(bytes)) this.firstContentAt = performance.now();
     },
     markInterrupted() {
       this.interrupted = true;
@@ -337,6 +339,11 @@ export function createStreamTiming(options: StreamTimingOptions = {}): StreamTim
     },
     firstForwardEpochMs() {
       return this.firstForwardAt === null ? null : this.wallAnchorEpochMs + (this.firstForwardAt - this.startedAt);
+    },
+    firstOutputEpochMs() {
+      return this.firstOutputAt === null
+        ? null
+        : this.wallAnchorEpochMs + (this.firstOutputAt - this.startedAt);
     },
     firstContentEpochMs() {
       return this.firstContentAt === null

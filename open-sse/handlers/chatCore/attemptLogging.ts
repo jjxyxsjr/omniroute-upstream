@@ -264,12 +264,20 @@ export type PersistAttemptLogsArgs = {
   /** Legacy alias callers still pass (line 441 destructure, 587 consumer). */
   ttftMs?: number | null;
   /**
-   * nnd.42 (#223 TTFT audit): wall-clock epochs from streamTiming projected
-   * onto Date.now() at construction — when the first upstream BYTE arrived
-   * (accepted/headers) and when the first chunk was FORWARDED downstream.
-   * Persisted to call_logs.first_byte_at / first_forward_at so any long TTFT
-   * splits into "not yet accepted" vs "accepted-but-silent prefill" from the
-   * row alone. Monotonic-clock internals never leave the process.
+   * nnd.44 ②-fix (#227, operator ruling): wall-clock epochs for the TTFT-audit
+   * pair — TWO DIFFERENT events by construction:
+   *   firstByteEpochMs   → persisted to call_logs.first_byte_at  = FIRST
+   *                        OUTPUT event epoch (the #29 ttft source — first
+   *                        forwarded chunk with text/reasoning/tool);
+   *   firstForwardEpochMs→ persisted to call_logs.first_forward_at = upstream
+   *                        DISPATCH epoch (chatCore's #94 anchor, the moment
+   *                        the request left for the provider).
+   * first_byte_at − first_forward_at therefore recovers the seconds-level
+   * dispatch→first-output latency (ttft minus queueing). The nnd.42 pairing
+   * (headers-accepted vs first-chunk-forward) proved unable to separate: on
+   * GLM the first SSE frame rides in with the headers, so both columns
+   * collapsed onto one millisecond (live-fire 2026-11-11). Monotonic-clock
+   * internals never leave the process.
    */
   firstByteEpochMs?: number | null;
   firstForwardEpochMs?: number | null;

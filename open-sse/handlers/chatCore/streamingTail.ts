@@ -135,6 +135,7 @@ export async function runStreamingTail(deps: StreamingTailDeps) {
     semanticCacheEnabled,
     skillRequestId,
     startTime,
+    getUpstreamDispatchedAt,
     stream,
     streamController,
     streamUserAgent,
@@ -383,11 +384,20 @@ export async function runStreamingTail(deps: StreamingTailDeps) {
     partialUsage: streamPartialUsage,
   }) => {
     const ttft = requestTtftMs(streamTimingOriginOffsetMs, firstOutputMs);
-    // nnd.42 (#223): wall-clock epochs of first upstream byte / first forward
-    // for this attempt's stream — persisted alongside ttft so audits split
-    // "not yet accepted" vs "accepted-but-silent" per row. Nulls when the
-    // transform stream is absent (non-streaming) or nothing arrived.
+    // nnd.44 ②-fix (#227, operator ruling 2026-11-11): the audit pair must be
+    // two DIFFERENT events or the split collapses to zero. Live-fire proof:
+    // "first byte = headers/transform-construction" and "first forward = first
+    // chunk enqueued" landed in the same tick on GLM (the upstream emits its
+    // first SSE frame immediately with the headers), so both columns carried
+    // the same instant while ttft_ms held the real 4-9s. Ruling:
+    //   first_forward_at := upstream DISPATCH moment (chatCore's
+    //                        #94/#29 anchor — request actually sent upstream)
+    //   first_byte_at    := FIRST OUTPUT event epoch (the #29 ttft source:
+    //                        first forwarded chunk with text/reasoning/tool)
+    // Δ = dispatch → first output ≈ ttft_ms − queue_wait — seconds-level truth.
     const streamEpochs = streamTimingEpochs(transformStream);
+    const upstreamDispatchEpochMs =
+      typeof getUpstreamDispatchedAt === "function" ? getUpstreamDispatchedAt() : null;
     // nnd.44 ②b (#232): bounded forwarded-chunk epoch sample → the artifact
     // worker aggregates it into call_logs (ITL p99 / >2s stalls / first
     // content at). Sampled on the forward path, aggregated off-thread,
@@ -583,9 +593,16 @@ export async function runStreamingTail(deps: StreamingTailDeps) {
       // #13130: persist TTFT so call_logs.ttft_ms lets the dashboard compute
       // generation-time TPS instead of wall-clock TPS.
       ttft,
-      // nnd.42 (#223): first-byte / first-forward wall-clock epochs.
-      firstByteEpochMs: streamEpochs.firstByteEpochMs,
-      firstForwardEpochMs: streamEpochs.firstForwardEpochMs,
+      // nnd.44 ②-fix (#227): first_byte_at = FIRST OUTPUT event epoch (the
+      // #29 ttft source); first_forward_at = upstream DISPATCH epoch. The old
+      // headers-accepted/first-chunk pair is kept accessible via
+      // streamTimingEpochs but no longer persisted — it provably collapses to
+      // one instant when the upstream emits its first frame with the headers.
+      firstByteEpochMs: streamEpochs.firstOutputEpochMs,
+      firstForwardEpochMs:
+        upstreamDispatchEpochMs != null && Number.isFinite(upstreamDispatchEpochMs)
+          ? upstreamDispatchEpochMs
+          : null,
       // nnd.44 ②b (#232): forwarded-chunk epoch sample for worker aggregation.
       chunkTiming,
       reasoningMeta: streamReasoningMeta ?? null,

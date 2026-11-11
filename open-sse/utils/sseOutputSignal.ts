@@ -177,6 +177,26 @@ export function sseChunkCarriesOutput(chunk: string): boolean {
  */
 export function sseChunkCarriesContent(chunk: string): boolean {
   if (!chunk.includes("data:")) return false;
+  // nnd.44 ②-fix prefilter: a content frame MUST carry one of these bare
+  // substrings (the JSON keys "text"/"content"/"tool_calls"/"partial_json",
+  // event types like output_text.delta, or "refusal"). Bare, unquoted terms —
+  // a quoted form ('"text') missed "response.output_text.delta" (underscore
+  // prefix) in tests. The includes() check is ~free next to split+JSON.parse,
+  // which lets streamTiming probe EVERY frame past its early window
+  // (deep-think streams emit hundreds of reasoning-only frames; a 1-in-16
+  // stride probe missed a content burst confined between strides — live trial
+  // 2026-11-11 18:13, first_content_at NULL on a stream that plainly
+  // answered).
+  if (
+    !chunk.includes("text") &&
+    !chunk.includes("content") &&
+    !chunk.includes("partial_json") &&
+    !chunk.includes("tool") &&
+    !chunk.includes("function_call") &&
+    !chunk.includes("refusal")
+  ) {
+    return false;
+  }
   for (const line of chunk.split("\n")) {
     const trimmed = line.trimStart();
     if (!trimmed.startsWith("data:")) continue;
