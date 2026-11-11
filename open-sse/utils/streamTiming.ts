@@ -4,7 +4,12 @@
  * One reusable seam for measuring the streaming path. It is created once per
  * stream and marked from the SSE transform:
  *
- *   markByte()     — first upstream chunk received (bytes arrived from provider)
+ *   markByte()     — upstream ACCEPT moment: createSSEStream marks it at
+ *                    construction, which every caller reaches only after the
+ *                    upstream Response headers arrived (nnd.44 ②a, #227 — the
+ *                    old first-body-chunk mark sat in the same tick as the
+ *                    first forward, so the two audit columns never diverged);
+ *                    the transform keeps a lower-bound fallback mark
  *   markForward()  — first chunk forwarded to the client (first SSE chunk enqueued)
  *
  * `ttft()` is therefore **first-forwarded-SSE-chunk latency**, NOT token-level
@@ -31,7 +36,7 @@
  * already follows on this streaming path.
  */
 import { attachTokensPerSecond, generationDurationMs } from "./generationThroughput.ts";
-import { sseChunkCarriesOutput } from "./sseOutputSignal.ts";
+import { sseChunkCarriesContent, sseChunkCarriesOutput } from "./sseOutputSignal.ts";
 
 export interface StreamTiming {
   startedAt: number;
@@ -41,11 +46,21 @@ export interface StreamTiming {
   firstForwardAt: number | null;
   /** First forwarded chunk that carried text, reasoning or a tool call. */
   firstOutputAt: number | null;
+  /** First forwarded chunk that carried CONTENT — reasoning placeholders skipped (nnd.44 ②b). */
+  firstContentAt: number | null;
   lastForwardAt: number | null;
   /** Mean gap between forwarded chunks (ms), bounded window. */
   interChunkGaps: number[];
   forwardedChunks: number;
   interrupted: boolean;
+  /**
+   * Bounded wall-clock epoch sample of forwarded chunks (nnd.44 ②b #232).
+   * Client-pacing ITL p50/p99 and >2s stall counts aggregate from this in the
+   * artifact worker — aggregates only are persisted, never the full list.
+   */
+  forwardedChunkEpochs: number[];
+  /** True once a forward happened beyond the epoch sample cap. */
+  chunkEpochsTruncated: boolean;
   markByte(): void;
   markForward(): void;
   /** Mark the first forwarded chunk that carries output the user can see. */
@@ -58,6 +73,13 @@ export interface StreamTiming {
    * OUTPUT_PROBE_STRIDE keeps being parsed past the window, see createStreamTiming().
    */
   observeOutput(bytes: Uint8Array): void;
+  /**
+   * nnd.44 ②b: same bounded probe, but for CONTENT — reasoning_content /
+   * thinking placeholders do not count. Deep-think streams can emit hundreds of
+   * reasoning-only frames, so this probe uses the same stride pattern past the
+   * window with back-fill to keep first_content_at honest.
+   */
+  observeContent(bytes: Uint8Array): void;
   markInterrupted(): void;
   /** First-forwarded-SSE-chunk latency in ms, or null if nothing was forwarded. */
   ttftMs(): number | null;
@@ -69,6 +91,18 @@ export interface StreamTiming {
   firstByteEpochMs(): number | null;
   /** Wall-clock epoch (ms) of the first forwarded SSE chunk, or null. */
   firstForwardEpochMs(): number | null;
+  /** Wall-clock epoch (ms) of the first forwarded chunk carrying content, or null. */
+  firstContentEpochMs(): number | null;
+  /**
+   * Bounded epoch sample for the artifact worker (nnd.44 ②b). Null epochs when
+   * nothing was forwarded. This is the ONLY shape that leaves the process
+   * boundary — the worker aggregates it into call_logs chunk columns.
+   */
+  chunkTimingSample(): {
+    epochs: number[];
+    truncated: boolean;
+    firstContentEpochMs: number | null;
+  } | null;
   /**
    * Time from stream start to the first forwarded chunk carrying output, or null when no
    * chunk carried any. Unlike ttftMs(), keepalive, role-only and lifecycle frames are skipped.
@@ -97,6 +131,12 @@ const MAX_INTER_CHUNK_GAPS = 32;
 const MAX_OUTPUT_PROBES = 64;
 /** Beyond the full window, probe one forwarded chunk out of this many. */
 const OUTPUT_PROBE_STRIDE = 16;
+/**
+ * nnd.44 ②b: cap on forwarded-chunk epoch samples per stream. Long streams
+ * stop being sampled past this (chunkEpochsTruncated) — ITL aggregates over
+ * the covered prefix, documented as a sample, never a census.
+ */
+export const CHUNK_EPOCH_SAMPLE_CAP = 1024;
 
 /**
  * Request start → first chunk with text, reasoning or a tool call: `originOffsetMs` is the time
@@ -152,6 +192,20 @@ export function streamTimingEpochs(
   };
 }
 
+/**
+ * nnd.44 ②b (#232): bounded forwarded-chunk epoch sample for a registered
+ * stream — the payload the artifact worker aggregates into the call_logs
+ * chunk columns (ITL p99 / >2s stalls / first content at). Null when the
+ * stream is unknown or forwarded nothing and never found content.
+ */
+export function streamTimingChunkSample(
+  stream: object | null | undefined
+): { epochs: number[]; truncated: boolean; firstContentEpochMs: number | null } | null {
+  const timing = stream ? timingByStream.get(stream) : undefined;
+  if (!timing) return null;
+  return timing.chunkTimingSample();
+}
+
 export interface StreamTimingOptions {
   /**
    * #16927 opt-in (STREAM_LATE_OUTPUT_PROBE_ENABLED, resolved by the caller): past the first
@@ -175,6 +229,14 @@ export function createStreamTiming(options: StreamTimingOptions = {}): StreamTim
   const skippedSinceProbe: SkippedChunk[] = [];
   const carriesOutput = (bytes: Uint8Array): boolean =>
     sseChunkCarriesOutput(outputDecoder.decode(bytes));
+  // nnd.44 ②b: CONTENT probe state — same stride/backfill pattern as the output
+  // probe above, but reasoning placeholders never satisfy it. Deep-think streams
+  // can run hundreds of reasoning-only frames before the first content delta.
+  const contentDecoder = new TextDecoder();
+  let contentProbed = 0;
+  const skippedSinceContentProbe: SkippedChunk[] = [];
+  const carriesContent = (bytes: Uint8Array): boolean =>
+    sseChunkCarriesContent(contentDecoder.decode(bytes));
   const timing: StreamTiming = {
     startedAt: performance.now(),
     // Wall-clock anchor captured once at construction. The monotonic marks
@@ -187,9 +249,12 @@ export function createStreamTiming(options: StreamTimingOptions = {}): StreamTim
     firstByteAt: null,
     firstForwardAt: null,
     firstOutputAt: null,
+    firstContentAt: null,
     lastForwardAt: null,
     interChunkGaps: [],
     forwardedChunks: 0,
+    forwardedChunkEpochs: [],
+    chunkEpochsTruncated: false,
     interrupted: false,
     markByte() {
       if (this.firstByteAt === null) this.firstByteAt = performance.now();
@@ -202,6 +267,13 @@ export function createStreamTiming(options: StreamTimingOptions = {}): StreamTim
       }
       this.lastForwardAt = now;
       this.forwardedChunks += 1;
+      // nnd.44 ②b: bounded epoch sample (wall projection, same anchor as the
+      // other epoch accessors). Aggregated off-thread — see chunkTimingSample().
+      if (this.forwardedChunkEpochs.length < CHUNK_EPOCH_SAMPLE_CAP) {
+        this.forwardedChunkEpochs.push(this.wallAnchorEpochMs + (now - this.startedAt));
+      } else if (!this.chunkEpochsTruncated) {
+        this.chunkEpochsTruncated = true;
+      }
     },
     markOutput() {
       if (this.firstOutputAt === null) this.firstOutputAt = performance.now();
@@ -229,6 +301,31 @@ export function createStreamTiming(options: StreamTimingOptions = {}): StreamTim
       skippedSinceProbe.length = 0;
       this.firstOutputAt = earliest ? earliest.at : at;
     },
+    observeContent(bytes) {
+      if (this.firstContentAt !== null) return;
+      const probed = contentProbed;
+      if (probed < MAX_OUTPUT_PROBES) {
+        contentProbed += 1;
+        if (carriesContent(bytes)) this.firstContentAt = performance.now();
+        return;
+      }
+      // Stride past the window even without the #16927 flag: reasoning prefixes
+      // are exactly the case where content starts beyond the early window, and
+      // first_content_at is an audit scalar, not a hot-path decision input.
+      contentProbed += 1;
+      const at = performance.now();
+      if (probed % OUTPUT_PROBE_STRIDE !== 0) {
+        skippedSinceContentProbe.push({ bytes, at });
+        return;
+      }
+      if (!carriesContent(bytes)) {
+        skippedSinceContentProbe.length = 0;
+        return;
+      }
+      const earliest = skippedSinceContentProbe.find((chunk) => carriesContent(chunk.bytes));
+      skippedSinceContentProbe.length = 0;
+      this.firstContentAt = earliest ? earliest.at : at;
+    },
     markInterrupted() {
       this.interrupted = true;
     },
@@ -240,6 +337,19 @@ export function createStreamTiming(options: StreamTimingOptions = {}): StreamTim
     },
     firstForwardEpochMs() {
       return this.firstForwardAt === null ? null : this.wallAnchorEpochMs + (this.firstForwardAt - this.startedAt);
+    },
+    firstContentEpochMs() {
+      return this.firstContentAt === null
+        ? null
+        : this.wallAnchorEpochMs + (this.firstContentAt - this.startedAt);
+    },
+    chunkTimingSample() {
+      if (this.forwardedChunkEpochs.length === 0 && this.firstContentAt === null) return null;
+      return {
+        epochs: this.forwardedChunkEpochs,
+        truncated: this.chunkEpochsTruncated,
+        firstContentEpochMs: this.firstContentEpochMs(),
+      };
     },
     firstOutputMs() {
       return this.firstOutputAt === null ? null : this.firstOutputAt - this.startedAt;

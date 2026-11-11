@@ -6,6 +6,7 @@ import {
   type CallLogArtifact,
   type CallLogArtifactWriteResult,
 } from "./callLogArtifacts.ts";
+import { aggregateChunkTiming, type ChunkTimingAggregates, type ChunkTimingSample } from "./chunkTimingStats.ts";
 
 /**
  * nnd.42 ① (#212): sanitize the big bodies HERE, off the request-serving
@@ -34,6 +35,12 @@ function protectArtifactBodiesInPlace(artifact: CallLogArtifact): void {
 type WriteRequest = {
   id: number;
   artifact: CallLogArtifact;
+  /**
+   * nnd.44 ②b (#232): forwarded-chunk epoch sample riding the same postMessage.
+   * Aggregated HERE, off the request-serving thread, while the worker already
+   * walks the payload — the reply carries the scalars, never the list.
+   */
+  chunkTiming?: ChunkTimingSample | null;
   environment: {
     pipelineMaxSizeKb?: string;
     chatDebugFile?: string;
@@ -44,7 +51,7 @@ type WriteRequest = {
 
 type WriteReply = {
   id: number;
-  result: CallLogArtifactWriteResult | null;
+  result: (CallLogArtifactWriteResult & { chunkStats?: ChunkTimingAggregates | null }) | null;
 };
 
 function applyWriteEnvironment(environment: WriteRequest["environment"]): void {
@@ -64,7 +71,7 @@ function applyWriteEnvironment(environment: WriteRequest["environment"]): void {
 
 parentPort?.on("message", (request: WriteRequest) => {
   const originalConsoleError = console.error;
-  let result: CallLogArtifactWriteResult | null = null;
+  let result: WriteReply["result"] = null;
 
   try {
     // The writer reads these options lazily; mirror the caller's per-write environment snapshot.
@@ -74,6 +81,15 @@ parentPort?.on("message", (request: WriteRequest) => {
     // writeCallArtifact's legacy error includes filesystem paths. Keep worker failures generic.
     console.error = () => {};
     result = writeCallArtifact(request.artifact);
+    // nnd.44 ②b (#232): aggregate the chunk-epoch sample in the same pass —
+    // the row's chunk columns are updated by the main thread from this reply.
+    if (result && request.chunkTiming) {
+      try {
+        result.chunkStats = aggregateChunkTiming(request.chunkTiming);
+      } catch {
+        result.chunkStats = null;
+      }
+    }
   } catch {
     result = null;
   } finally {

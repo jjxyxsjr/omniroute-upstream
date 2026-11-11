@@ -27,7 +27,9 @@ import {
 import type { StreamTiming } from "./streamTiming.ts";
 
 type OutputController = TransformStreamDefaultController<Uint8Array>;
-type SinkTiming = Pick<StreamTiming, "markForward" | "observeOutput">;
+// nnd.44 ②b: observeContent rides the same forward path so first_content_at
+// sees exactly what the client saw (batched frames included).
+type SinkTiming = Pick<StreamTiming, "markForward" | "observeOutput" | "observeContent">;
 
 /** Upper bound for one batched enqueue; a fuller batch is flushed without waiting. */
 const MAX_BATCH_BYTES = 64 * 1024;
@@ -82,6 +84,7 @@ export function createSSEOutputSink(
     if (closed || !controllerRef) return;
     timing.markForward();
     timing.observeOutput(bytes);
+    timing.observeContent(bytes);
     try {
       controllerRef.enqueue(bytes);
     } catch {
@@ -145,6 +148,7 @@ export function createSSEOutputSink(
     if (!deltaStage && frameWindowMs <= 0) {
       timing.markForward();
       timing.observeOutput(bytes);
+      timing.observeContent(bytes);
       controller.enqueue(bytes);
       return;
     }

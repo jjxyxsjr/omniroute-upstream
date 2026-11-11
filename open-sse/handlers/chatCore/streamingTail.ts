@@ -15,7 +15,12 @@ import {
 import { isEmptyContentResponse } from "../../services/errorClassifier.ts";
 import { incrementTokenUsage } from "../../services/geminiRateLimitTracker.ts";
 import { forgetClaudeThinkingForClientResponse } from "../../services/claudeThinkingStore.ts";
-import { requestTtftMs, streamEmittedOutput, streamTimingEpochs } from "../../utils/streamTiming.ts";
+import {
+  requestTtftMs,
+  streamEmittedOutput,
+  streamTimingChunkSample,
+  streamTimingEpochs,
+} from "../../utils/streamTiming.ts";
 import { readStreamPartialUsage } from "../../utils/streamPartialUsage.ts";
 import { clearPostOutputFailureStreak } from "../../services/accountFallback/postOutputFailureStreak.ts";
 import {
@@ -383,6 +388,11 @@ export async function runStreamingTail(deps: StreamingTailDeps) {
     // "not yet accepted" vs "accepted-but-silent" per row. Nulls when the
     // transform stream is absent (non-streaming) or nothing arrived.
     const streamEpochs = streamTimingEpochs(transformStream);
+    // nnd.44 ②b (#232): bounded forwarded-chunk epoch sample → the artifact
+    // worker aggregates it into call_logs (ITL p99 / >2s stalls / first
+    // content at). Sampled on the forward path, aggregated off-thread,
+    // persisted as scalars only.
+    const chunkTiming = streamTimingChunkSample(transformStream);
     let normalizedStreamStatus = streamStatus || 200;
     if (streamCompletionRecorded) return;
     streamCompletionRecorded = true;
@@ -576,6 +586,8 @@ export async function runStreamingTail(deps: StreamingTailDeps) {
       // nnd.42 (#223): first-byte / first-forward wall-clock epochs.
       firstByteEpochMs: streamEpochs.firstByteEpochMs,
       firstForwardEpochMs: streamEpochs.firstForwardEpochMs,
+      // nnd.44 ②b (#232): forwarded-chunk epoch sample for worker aggregation.
+      chunkTiming,
       reasoningMeta: streamReasoningMeta ?? null,
     });
 

@@ -325,6 +325,23 @@ export function ensureCallLogsColumns(db: SqliteDatabase) {
       db.exec("ALTER TABLE call_logs ADD COLUMN first_forward_at INTEGER DEFAULT NULL");
       console.log("[DB] Added call_logs.first_forward_at column");
     }
+    // nnd.44 ②b (#232 observability gen-2): stream-pacing aggregates computed
+    // by the artifact worker from the bounded forwarded-chunk epoch sample —
+    // ITL p99, >2s stall count, and the first CONTENT chunk epoch (reasoning
+    // placeholders skipped). Aggregates only, never the chunk list. Same
+    // idempotent guarded pattern as the 42-batch epoch columns above.
+    if (!columnNames.has("chunk_itl_p99_ms")) {
+      db.exec("ALTER TABLE call_logs ADD COLUMN chunk_itl_p99_ms INTEGER DEFAULT NULL");
+      console.log("[DB] Added call_logs.chunk_itl_p99_ms column");
+    }
+    if (!columnNames.has("chunk_pause_2s_count")) {
+      db.exec("ALTER TABLE call_logs ADD COLUMN chunk_pause_2s_count INTEGER DEFAULT NULL");
+      console.log("[DB] Added call_logs.chunk_pause_2s_count column");
+    }
+    if (!columnNames.has("first_content_at")) {
+      db.exec("ALTER TABLE call_logs ADD COLUMN first_content_at INTEGER DEFAULT NULL");
+      console.log("[DB] Added call_logs.first_content_at column");
+    }
 
     db.exec(
       "CREATE INDEX IF NOT EXISTS idx_call_logs_requested_model ON call_logs(requested_model)"

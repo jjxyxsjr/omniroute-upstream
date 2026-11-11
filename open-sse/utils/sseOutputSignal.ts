@@ -47,6 +47,28 @@ function chatChoiceCarriesOutput(choice: unknown): boolean {
   );
 }
 
+/**
+ * nnd.44 ②b (#232): CONTENT variant — reasoning placeholders do not count.
+ * reasoning_content / reasoning deltas are thinking-channel output;
+ * first_content_at must measure when the answer itself started, so a
+ * deep-think prefix does not masquerade as content.
+ */
+function chatChoiceCarriesContent(choice: unknown): boolean {
+  if (!isRecord(choice)) return false;
+  const delta = isRecord(choice.delta)
+    ? choice.delta
+    : isRecord(choice.message)
+      ? choice.message
+      : null;
+  if (!delta) return false;
+  return (
+    hasText(delta.content) ||
+    hasText(delta.refusal) ||
+    (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) ||
+    isRecord(delta.function_call)
+  );
+}
+
 /** Claude Messages and OpenAI Responses events; null when the type belongs to neither. */
 function typedEventCarriesOutput(type: string, event: Record<string, unknown>): boolean | null {
   if (type === "content_block_delta" && isRecord(event.delta)) {
@@ -57,6 +79,31 @@ function typedEventCarriesOutput(type: string, event: Record<string, unknown>): 
     return CLAUDE_TOOL_BLOCK_TYPES.has(String(event.content_block.type));
   }
   if (type.startsWith("response.") && type.endsWith(".delta")) return hasText(event.delta);
+  if (type === "response.output_item.added" && isRecord(event.item)) {
+    return RESPONSES_TOOL_ITEM_TYPES.has(String(event.item.type));
+  }
+  return null;
+}
+
+/**
+ * nnd.44 ②b (#232): CONTENT variant of typedEventCarriesOutput — thinking /
+ * reasoning-summary frames never count. Null when the type belongs to neither
+ * family (mirrors the output variant's contract).
+ */
+function typedEventCarriesContent(type: string, event: Record<string, unknown>): boolean | null {
+  if (type === "content_block_delta" && isRecord(event.delta)) {
+    const delta = event.delta;
+    return hasText(delta.text) || hasText(delta.partial_json);
+  }
+  if (type === "content_block_start" && isRecord(event.content_block)) {
+    return CLAUDE_TOOL_BLOCK_TYPES.has(String(event.content_block.type));
+  }
+  if (type.startsWith("response.") && type.endsWith(".delta")) {
+    // Responses reasoning events (response.reasoning_summary_text.delta and
+    // friends) carry text deltas that belong to the thinking channel.
+    if (type.startsWith("response.reasoning")) return false;
+    return hasText(event.delta);
+  }
   if (type === "response.output_item.added" && isRecord(event.item)) {
     return RESPONSES_TOOL_ITEM_TYPES.has(String(event.item.type));
   }
@@ -88,6 +135,20 @@ function eventCarriesOutput(event: Record<string, unknown>): boolean {
   return false;
 }
 
+/** nnd.44 ②b: CONTENT variant — Gemini parts are content by construction, unchanged. */
+function eventCarriesContent(event: Record<string, unknown>): boolean {
+  if (Array.isArray(event.choices)) return event.choices.some(chatChoiceCarriesContent);
+
+  const typed = typedEventCarriesContent(typeof event.type === "string" ? event.type : "", event);
+  if (typed !== null) return typed;
+
+  if (isRecord(event.response) && Array.isArray(event.response.candidates)) {
+    return geminiCandidatesCarryOutput(event.response.candidates);
+  }
+  if (Array.isArray(event.candidates)) return geminiCandidatesCarryOutput(event.candidates);
+  return false;
+}
+
 /** True when any `data:` event in this SSE chunk carries text, reasoning or a tool call. */
 export function sseChunkCarriesOutput(chunk: string): boolean {
   if (!chunk.includes("data:")) return false;
@@ -103,6 +164,31 @@ export function sseChunkCarriesOutput(chunk: string): boolean {
       continue;
     }
     if (isRecord(event) && eventCarriesOutput(event)) return true;
+  }
+  return false;
+}
+
+/**
+ * nnd.44 ②b (#232): true when any `data:` event carries CONTENT — text,
+ * refusal, tool call or partial JSON — while reasoning/thinking placeholders
+ * (reasoning_content deltas, Claude thinking blocks, Responses reasoning
+ * summaries) never satisfy it. Backs call_logs.first_content_at so a
+ * deep-think prefix does not read as "answer started".
+ */
+export function sseChunkCarriesContent(chunk: string): boolean {
+  if (!chunk.includes("data:")) return false;
+  for (const line of chunk.split("\n")) {
+    const trimmed = line.trimStart();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice(5).trim();
+    if (payload.length === 0 || payload[0] !== "{") continue;
+    let event: unknown;
+    try {
+      event = JSON.parse(payload);
+    } catch {
+      continue;
+    }
+    if (isRecord(event) && eventCarriesContent(event)) return true;
   }
   return false;
 }

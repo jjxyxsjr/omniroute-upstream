@@ -274,6 +274,19 @@ export type PersistAttemptLogsArgs = {
   firstByteEpochMs?: number | null;
   firstForwardEpochMs?: number | null;
   /**
+   * nnd.44 ②b (#232): bounded forwarded-chunk epoch sample from streamTiming.
+   * Crosses to the artifact worker, which aggregates it into the call_logs
+   * chunk columns (chunk_itl_p99_ms / chunk_pause_2s_count / first_content_at)
+   * while it already sanitizes the payload; the main thread falls back to the
+   * same pure aggregation for rows that never produce an artifact. Aggregates
+   * only — the epoch list itself is never persisted.
+   */
+  chunkTiming?: {
+    epochs: number[];
+    truncated: boolean;
+    firstContentEpochMs: number | null;
+  } | null;
+  /**
    * Encrypted-reasoning observation from the stream loops (flag + wall-clock
    * duration only). Efforts are read at the sink from the request bodies.
    */
@@ -621,6 +634,22 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
     firstForwardAt: typeof args.firstForwardEpochMs === "number" && Number.isFinite(args.firstForwardEpochMs)
       ? Math.round(args.firstForwardEpochMs)
       : null,
+    // nnd.44 ②b (#232): forwarded-chunk epoch sample for worker aggregation
+    // into the call_logs chunk columns. Null on non-streaming paths.
+    chunkTiming:
+      args.chunkTiming && Array.isArray(args.chunkTiming.epochs)
+        ? {
+            epochs: args.chunkTiming.epochs.filter(
+              (epoch) => typeof epoch === "number" && Number.isFinite(epoch)
+            ),
+            truncated: args.chunkTiming.truncated === true,
+            firstContentEpochMs:
+              typeof args.chunkTiming.firstContentEpochMs === "number" &&
+              Number.isFinite(args.chunkTiming.firstContentEpochMs)
+                ? args.chunkTiming.firstContentEpochMs
+                : null,
+          }
+        : null,
     // 2g-a: the nnd.31 rebuild dropped this entry-level field (only the
     // streamChunks copy survived), silencing queue_wait_ms for three days —
     // restored (#94). Lazily read so every error exit reports it too.

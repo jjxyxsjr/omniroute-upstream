@@ -821,6 +821,18 @@ export function createSSEStream(options: StreamOptions = {}) {
   // #16927 opt-in: keep probing for late visible output past the first 64 chunks (fail
   // closed: any flag-resolution error keeps the release 64-chunk window).
   const timing: StreamTiming = createStreamTiming({ probeLateOutput: isLateOutputProbeEnabled() });
+  // nnd.44 ②a (#227 fix): mark the byte moment AT CONSTRUCTION. Every caller of
+  // createSSEStream builds the transform from an already-received upstream
+  // Response (streamingTail post-fetch; glm translateSseResponse(response)),
+  // so construction time IS the "upstream accepted (headers)" instant the
+  // first_byte_at column documents. The transform's own markByte() fired only
+  // when the first BODY chunk arrived — with immediate forwarding that left
+  // first_byte_at === first_forward_at on every row (#227: both columns
+  // stamped the same millisecond) and the accepted-vs-silent-prefill split
+  // collapsed to zero. The transform mark stays as a lower-bound fallback for
+  // any future caller that constructs pre-fetch: markByte() only records
+  // while unset.
+  timing.markByte();
 
   // Drop internal commentary-phase Responses output before forwarding (#6199).
   // Explicit option wins; otherwise read the feature flag (default on) — resolved once per stream.

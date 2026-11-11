@@ -6,27 +6,39 @@ import { Worker } from "node:worker_threads";
 import { resolveWritableDataDir } from "../dataPaths";
 
 import type { CallLogArtifact, CallLogArtifactWriteResult } from "./callLogArtifacts.ts";
+import type { ChunkTimingAggregates, ChunkTimingSample } from "./chunkTimingStats.ts";
 
 const MAX_QUEUED_JOBS = 128;
 const IDLE_TIMEOUT_MS = 30_000;
 const CLOSE_TIMEOUT_MS = 2_000;
 const WARNING_INTERVAL_MS = 30_000;
 
+/** nnd.44 ②b: the artifact write reply also carries the aggregated chunk stats. */
+export type CallLogArtifactWorkerResult = CallLogArtifactWriteResult & {
+  chunkStats?: ChunkTimingAggregates | null;
+};
+
 type WorkerReply = {
   id: number;
-  result: CallLogArtifactWriteResult | null;
+  result: CallLogArtifactWorkerResult | null;
 };
 
 type QueueItem = {
   id: number;
   artifact: CallLogArtifact;
+  /**
+   * nnd.44 ②b (#232): forwarded-chunk epoch sample for this row. Transport
+   * only — rides the SAME postMessage the artifact already pays for, is
+   * aggregated inside the worker, and is never persisted as a list.
+   */
+  chunkTiming?: ChunkTimingSample | null;
   environment: {
     pipelineMaxSizeKb?: string;
     chatDebugFile?: string;
     appLogLevel?: string;
     dataDir?: string;
   };
-  resolve: (result: CallLogArtifactWriteResult | null) => void;
+  resolve: (result: CallLogArtifactWorkerResult | null) => void;
 };
 
 let worker: Worker | null = null;
@@ -209,6 +221,7 @@ function pump(): void {
       id: next.id,
       artifact: next.artifact,
       environment: next.environment,
+      ...(next.chunkTiming ? { chunkTiming: next.chunkTiming } : {}),
     });
   } catch (err) {
     failOpen(true, err);
@@ -216,17 +229,19 @@ function pump(): void {
 }
 
 export function writeCallArtifactAsync(
-  artifact: CallLogArtifact
-): Promise<CallLogArtifactWriteResult | null> {
+  artifact: CallLogArtifact,
+  chunkTiming?: ChunkTimingSample | null
+): Promise<CallLogArtifactWorkerResult | null> {
   if (closing || queue.length >= MAX_QUEUED_JOBS) {
     warnRateLimited("[callLogs] Call-log artifact queue unavailable; detail omitted.");
     return Promise.resolve(null);
   }
 
   return new Promise((resolve) => {
-    const item = {
+    const item: QueueItem = {
       id: nextId++,
       artifact,
+      ...(chunkTiming ? { chunkTiming } : {}),
       environment: {
         pipelineMaxSizeKb: process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB,
         chatDebugFile: process.env.CHAT_DEBUG_FILE,

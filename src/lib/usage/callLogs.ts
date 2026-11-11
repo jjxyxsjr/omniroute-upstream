@@ -44,6 +44,7 @@ import { parseStoredPayload } from "../logPayloads";
 import { pickDisplayValue } from "@/shared/utils/maskEmail";
 import { getCallLogsDir, type CallLogArtifact, type CallLogDetailState } from "./callLogArtifacts";
 import { closeCallLogArtifactWriter, writeCallArtifactAsync } from "./callLogArtifactWriter";
+import { aggregateChunkTiming, type ChunkTimingAggregates, type ChunkTimingSample } from "./chunkTimingStats";
 import { isWriteLockError, scheduleWriteRetry } from "./usageWriteRetry";
 import {
   toNumber,
@@ -100,6 +101,12 @@ type CallLogSummaryRow = {
   first_byte_at?: number | null;
   /** nnd.42 (#223): wall-clock epoch of first forwarded chunk (audit trail). */
   first_forward_at?: number | null;
+  /** nnd.44 ②b (#232): inter-forwarded-chunk latency p99 (ms, sampled). */
+  chunk_itl_p99_ms?: number | null;
+  /** nnd.44 ②b (#232): count of inter-chunk gaps > 2s (sampled). */
+  chunk_pause_2s_count?: number | null;
+  /** nnd.44 ②b (#232): epoch of first content chunk (reasoning skipped). */
+  first_content_at?: number | null;
   tokens_in: number | null;
   tokens_out: number | null;
   tokens_cache_read: number | null;
@@ -354,6 +361,26 @@ function resolveReasoningObservation(
   return { source: null, chars: null };
 }
 
+/** nnd.44 ②b: defensive normalization of the entry's chunk-epoch sample. */
+function normalizeChunkTimingSample(
+  value: unknown
+): ChunkTimingSample | null {
+  if (!value || typeof value !== "object") return null;
+  const sample = value as { epochs?: unknown; truncated?: unknown; firstContentEpochMs?: unknown };
+  if (!Array.isArray(sample.epochs)) return null;
+  const epochs = sample.epochs.filter(
+    (epoch): epoch is number => typeof epoch === "number" && Number.isFinite(epoch)
+  );
+  return {
+    epochs,
+    truncated: sample.truncated === true,
+    firstContentEpochMs:
+      typeof sample.firstContentEpochMs === "number" && Number.isFinite(sample.firstContentEpochMs)
+        ? sample.firstContentEpochMs
+        : null,
+  };
+}
+
 function hasCallLogsColumn(columnName: string): boolean {
   // One PRAGMA per INSERT is wasteful; the cached answer is invalidated only
   // when a write fails with "no such column" (concurrent migration race).
@@ -399,6 +426,10 @@ function mapSummaryRow(row: CallLogSummaryRow) {
     ttft: row.ttft_ms != null ? toNumber(row.ttft_ms) : null,
     firstByteAt: row.first_byte_at != null ? toNumber(row.first_byte_at) : null,
     firstForwardAt: row.first_forward_at != null ? toNumber(row.first_forward_at) : null,
+    // nnd.44 ②b (#232): chunk-pacing aggregates (sampled — see chunkTimingStats.ts).
+    chunkItlP99Ms: row.chunk_itl_p99_ms != null ? toNumber(row.chunk_itl_p99_ms) : null,
+    chunkPause2sCount: row.chunk_pause_2s_count != null ? toNumber(row.chunk_pause_2s_count) : null,
+    chunkFirstContentAt: row.first_content_at != null ? toNumber(row.first_content_at) : null,
     tokens: {
       in: toNumber(row.tokens_in),
       out: toNumber(row.tokens_out),
@@ -675,6 +706,11 @@ async function buildCallLogRow(entry: any): Promise<PreparedCallLogRow> {
       typeof entry.firstForwardAt === "number" && Number.isFinite(entry.firstForwardAt)
         ? Math.round(entry.firstForwardAt)
         : null,
+    // nnd.44 ②b (#232): forwarded-chunk epoch sample — aggregated into the
+    // chunk_itl_p99_ms / chunk_pause_2s_count / first_content_at columns by
+    // the artifact worker (fallback: inline aggregation below when this row
+    // never produces an artifact).
+    chunkTiming: normalizeChunkTimingSample(entry.chunkTiming),
     tokensIn: toNumber(getLoggedInputTokens(entry.tokens)),
     tokensOut: toNumber(getLoggedOutputTokens(entry.tokens)),
     tokensCacheRead: getPromptCacheReadTokensOrNull(entry.tokens),
@@ -738,6 +774,14 @@ async function buildCallLogRow(entry: any): Promise<PreparedCallLogRow> {
   const detailState: CallLogDetailState = detailExpected ? "pending" : "none";
   const detailPendingUntil = detailExpected ? Date.now() + 5 * 60_000 : null;
 
+  // nnd.44 ②b (#232): chunk-pacing aggregates. On the artifact path the
+  // WORKER computes them from the epoch sample riding the same postMessage
+  // and the row is updated from its reply; rows without an artifact (no
+  // bodies/error/pipeline to store) fall back to the same pure aggregation
+  // inline, so every streamed row carries the scalars either way.
+  const inlineChunkStats =
+    !detailExpected && logEntry.chunkTiming ? aggregateChunkTiming(logEntry.chunkTiming) : null;
+
   const insertParams = {
     ...logEntry,
     errorSummary: toStoredErrorSummary(protectedError),
@@ -745,6 +789,9 @@ async function buildCallLogRow(entry: any): Promise<PreparedCallLogRow> {
     detailPendingUntil,
     artifactRelPath: null,
     artifactSizeBytes: null,
+    chunkItlP99Ms: inlineChunkStats ? inlineChunkStats.itlP99Ms : null,
+    chunkPause2sCount: inlineChunkStats ? inlineChunkStats.pause2sCount : null,
+    chunkFirstContentAt: inlineChunkStats ? inlineChunkStats.firstContentAt : null,
       // 2g-a: admission→dispatch gap (semaphore + rate-limit queueing included).
       queueWaitMs:
         typeof entry.queueWaitMs === "number" &&
@@ -798,6 +845,16 @@ function insertCallLogRow(prepared: PreparedCallLogRow): void {
   const hasEpochColumns = hasCallLogsColumn("first_byte_at");
   const epochCol = hasEpochColumns ? ", first_byte_at, first_forward_at" : "";
   const epochParam = hasEpochColumns ? ", @firstByteAt, @firstForwardAt" : "";
+  // nnd.44 ②b (#232): optional chunk-pacing aggregate columns, same guarded
+  // pattern. Non-null here only on the no-artifact fallback path (see
+  // prepareCallLogRow); artifact rows are UPDATEd from the worker reply.
+  const hasChunkColumns = hasCallLogsColumn("chunk_itl_p99_ms");
+  const chunkCol = hasChunkColumns
+    ? ", chunk_itl_p99_ms, chunk_pause_2s_count, first_content_at"
+    : "";
+  const chunkParam = hasChunkColumns
+    ? ", @chunkItlP99Ms, @chunkPause2sCount, @chunkFirstContentAt"
+    : "";
   const insertStmt = db.prepare(
     `
       INSERT INTO call_logs (
@@ -813,7 +870,7 @@ function insertCallLogRow(prepared: PreparedCallLogRow): void {
         has_request_body, has_response_body, has_pipeline_details, request_summary,
         correlation_id, model_pinned, session_tag, response_id, error_type, error_raw_head,
         video_content_removed, has_content, usage_provenance,
-        added_wait_ms, added_wait_cause${resilienceCol}${epochCol}
+        added_wait_ms, added_wait_cause${resilienceCol}${epochCol}${chunkCol}
       )
       VALUES (
         @id, @timestamp, @method, @path, @status, @model, @requestedModel, @provider,
@@ -828,7 +885,7 @@ function insertCallLogRow(prepared: PreparedCallLogRow): void {
         @hasRequestBody, @hasResponseBody, @hasPipelineDetails, @requestSummary,
         @correlationId, @modelPinned, @sessionTag, @responseId, @errorType, @errorRawHead,
         @videoContentRemoved, @hasContent, @usageProvenance,
-        @addedWaitMs, @addedWaitCause${resilienceParam}${epochParam}
+        @addedWaitMs, @addedWaitCause${resilienceParam}${epochParam}${chunkParam}
       )
     `
   );
@@ -850,6 +907,28 @@ function insertCallLogRow(prepared: PreparedCallLogRow): void {
   resetResilienceActions();
 }
 
+/**
+ * nnd.44 ②b (#232): fill the chunk-pacing aggregate columns from the artifact
+ * worker's reply. Best-effort by design — observability scalars must never
+ * fail or retry the log pipeline; a lost update leaves NULLs, not bad data.
+ */
+function updateCallLogChunkTimingColumns(
+  db: PreparedCallLogRow["db"],
+  id: string,
+  stats: ChunkTimingAggregates
+): void {
+  try {
+    if (!hasCallLogsColumn("chunk_itl_p99_ms")) return;
+    db.prepare(
+      `UPDATE call_logs
+         SET chunk_itl_p99_ms = ?, chunk_pause_2s_count = ?, first_content_at = ?
+       WHERE id = ?`
+    ).run(stats.itlP99Ms, stats.pause2sCount, stats.firstContentAt, id);
+  } catch {
+    // swallow — see docblock
+  }
+}
+
 /** Write the inserted row's artifact and publish it, or make the row terminal missing. */
 async function publishCallLogDetail(prepared: PreparedCallLogRow): Promise<void> {
   const { db, logEntry, buildDetailArtifact, responseId } = prepared;
@@ -857,9 +936,18 @@ async function publishCallLogDetail(prepared: PreparedCallLogRow): Promise<void>
   if (buildDetailArtifact) {
     const id = String(logEntry.id);
     try {
-      const artifactResult = await writeCallArtifactAsync(buildDetailArtifact());
+      // nnd.44 ②b (#232): the chunk-epoch sample rides the same postMessage;
+      // the worker returns the aggregates with the write result and the row's
+      // chunk columns are filled from the reply.
+      const artifactResult = await writeCallArtifactAsync(
+        buildDetailArtifact(),
+        (logEntry.chunkTiming as ChunkTimingSample | null | undefined) ?? null
+      );
       if (artifactResult && publishPendingCallLogDetail(db, id, artifactResult)) {
         detailState = "ready";
+      }
+      if (artifactResult?.chunkStats) {
+        updateCallLogChunkTimingColumns(db, id, artifactResult.chunkStats);
       }
     } finally {
       // A null result or a thrown write must not strand the export cursor.
