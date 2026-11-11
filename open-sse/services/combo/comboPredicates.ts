@@ -24,6 +24,7 @@ import {
   AUTH_CREDENTIAL_ERROR_PATTERNS,
   isProviderModelUnsupported400,
   cooldownUntilMs,
+  isPlannedBlackoutRateLimitedUntil,
 } from "../accountFallback.ts";
 import { isRequestScoped400 } from "../accountFallback/requestScoped400.ts";
 import { isResourceNotFoundResponse } from "../errorClassifier.ts";
@@ -738,11 +739,20 @@ export function getConnectionStatusQuotaCutoffReason(
 export function getPersistedConnectionCooldownSkipReason(
   target: { modelStr: string; connectionId?: string | null },
   connection: Record<string, unknown> | null | undefined,
-  allowRateLimitedConnection = false
+  allowRateLimitedConnection = false,
+  lastResort = false
 ): string | null {
   if (!target.connectionId || !connection) return null;
   if (hasFutureRateLimitUntil(connection.rateLimitedUntil)) {
-    return `Skipping ${target.modelStr} — connection ${target.connectionId} has persisted cooldown until ${String(connection.rateLimitedUntil)}`;
+    // nnd.44 ③ (#213): encoding-aware exemption for the last-resort dispatch —
+    // a future EPOCH-encoded cooldown (real 429) may be retried once past,
+    // an ISO-encoded planned blackout / operator manual lock never is
+    // (isPlannedBlackoutRateLimitedUntil is the raw-encoding discriminator).
+    const epochCooldownExemptable =
+      lastResort && !isPlannedBlackoutRateLimitedUntil(connection.rateLimitedUntil);
+    if (!epochCooldownExemptable) {
+      return `Skipping ${target.modelStr} — connection ${target.connectionId} has persisted cooldown until ${String(connection.rateLimitedUntil)}`;
+    }
   }
   if (allowRateLimitedConnection) return null;
   const status = normalizeConnectionStatus(connection.testStatus);
@@ -793,7 +803,8 @@ export function getPersistedConnectionCooldownSkipReason(
 export async function resolvePersistedConnectionCooldownSkipReason(
   target: { modelStr: string; connectionId?: string | null },
   fetchConnection: (id: string) => Promise<Record<string, unknown> | null | undefined>,
-  allowRateLimitedConnection = false
+  allowRateLimitedConnection = false,
+  lastResort = false
 ): Promise<string | null> {
   if (!target.connectionId) return null;
   let connection: Record<string, unknown> | null | undefined;
@@ -803,7 +814,12 @@ export async function resolvePersistedConnectionCooldownSkipReason(
     // A DB read failure must never block dispatch — fall through to the upstream call.
     return null;
   }
-  return getPersistedConnectionCooldownSkipReason(target, connection, allowRateLimitedConnection);
+  return getPersistedConnectionCooldownSkipReason(
+    target,
+    connection,
+    allowRateLimitedConnection,
+    lastResort
+  );
 }
 
 /** @param {string} errorText */

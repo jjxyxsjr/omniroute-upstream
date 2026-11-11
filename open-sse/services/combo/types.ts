@@ -60,6 +60,14 @@ export type ComboLogger = {
 export type SingleModelTarget =
   | (ResolvedComboTarget & {
       allowRateLimitedConnection?: boolean;
+      /**
+       * nnd.44 ③ (#213): narrow last-resort flag — deliberately NOT the
+       * transient allowRateLimitedConnection flag. Threads target →
+       * handleSingleModel runtimeOptions → auth credential selection, where
+       * it grants the encoding-aware exemption (epoch cooldowns pass, ISO
+       * planned blackouts stay filtered).
+       */
+      lastResortDispatch?: boolean;
       effectiveComboStrategy?: string | null;
       modelAbortSignal?: AbortSignal | null;
       /** True when this target was selected via context-cache session pinning. */
@@ -236,6 +244,14 @@ export type ResolvedComboTarget = {
   failoverBeforeRetry?: unknown;
   fallbackOnlyOnQuotaExhaustion?: boolean;
   trafficType?: "production" | "shadow";
+  /**
+   * nnd.44 ③ (#213): set on the targetForAttempt of the request's single
+   * last-resort dispatch (never on stored targets). Thunks through
+   * handleSingleModel into auth credential selection, granting the
+   * encoding-aware cooldown exemption (epoch yes, ISO no). See
+   * combo/lastResortDispatch.ts.
+   */
+  lastResortDispatch?: boolean;
   /**
    * Fingerprint-based account pin resolved from a combo builder composite
    * connectionId (`${rowId}|fp|${fingerprint}`, see

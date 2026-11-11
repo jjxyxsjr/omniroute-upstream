@@ -1095,8 +1095,14 @@ export async function getProviderCredentials(
     }
 
     const allowSuppressedConnections = options.allowSuppressedConnections === true;
+    // nnd.44 ③ (#213): the last-resort flag feeds the SAME filter branch as
+    // the transient exemption — but ①b's encoding discriminator inside that
+    // branch keeps ISO planned blackouts / operator manual locks filtered, so
+    // the exemption stays encoding-aware (epoch cooldowns only).
     const allowRateLimitedConnections =
-      allowSuppressedConnections || options.allowRateLimitedConnections === true;
+      allowSuppressedConnections ||
+      options.allowRateLimitedConnections === true ||
+      options.lastResortDispatch === true;
     const bypassQuotaPolicy = options.bypassQuotaPolicy === true;
     let forcedConnectionId =
       typeof options.forcedConnectionId === "string" && options.forcedConnectionId.trim().length > 0

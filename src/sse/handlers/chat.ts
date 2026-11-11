@@ -1356,6 +1356,7 @@ async function handleChatImplementation(
         m: string,
         target?: {
           allowRateLimitedConnection?: boolean;
+          lastResortDispatch?: boolean;
           connectionId?: string | null;
           executionKey?: string | null;
           stepId?: string | null;
@@ -1388,6 +1389,9 @@ async function handleChatImplementation(
             comboExecutionKey: target?.executionKey || target?.stepId || null,
             skipUpstreamRetry: target?.failoverBeforeRetry ?? false,
             allowRateLimitedConnection: target?.allowRateLimitedConnection === true,
+            // nnd.44 ③ (#213): narrow last-resort flag — own lane, never the
+            // transient allowRateLimitedConnection flag.
+            lastResortDispatch: target?.lastResortDispatch === true,
             preselectedCredentials: (() => {
               const key = getComboCredentialCacheKey(m, target);
               const credentials = comboPreselectedCredentials.get(key);
@@ -1623,6 +1627,7 @@ async function handleSingleModelChat(
     comboExecutionKey?: string | null;
     skipUpstreamRetry?: boolean;
     allowRateLimitedConnection?: boolean;
+    lastResortDispatch?: boolean;
     preselectedCredentials?: any;
     cachedSettings?: any;
     providerId?: string | null;
@@ -1948,6 +1953,9 @@ async function handleSingleModelChat(
             ...(runtimeOptions.allowRateLimitedConnection
               ? { allowRateLimitedConnections: true }
               : {}),
+            ...(runtimeOptions.lastResortDispatch
+              ? { lastResortDispatch: true }
+              : {}),
             ...(forceLiveComboTest
               ? {
                   allowSuppressedConnections: true,
@@ -1966,7 +1974,9 @@ async function handleSingleModelChat(
                 excludedConnectionIds: excluded,
                 connections: [],
                 allowRateLimitedConnections:
-                  runtimeOptions.allowRateLimitedConnection === true || forceLiveComboTest,
+                  runtimeOptions.allowRateLimitedConnection === true ||
+                  forceLiveComboTest ||
+                  runtimeOptions.lastResortDispatch === true,
                 bypassQuotaPolicy: forceLiveComboTest || bypassProviderQuotaPolicy,
                 isQuotaExhausted: () => false,
                 isQuotaPolicyBlocked: () => false,

@@ -31,7 +31,8 @@ export async function resolveAndRecordPersistedCooldown(
   state: CooldownState,
   target: { modelStr: string; connectionId?: string | null },
   fetchConnection: (id: string) => Promise<Connection>,
-  allowRateLimitedConnection = false
+  allowRateLimitedConnection = false,
+  lastResort = false
 ): Promise<string | null> {
   let connection: Connection;
   const reason = await resolvePersistedConnectionCooldownSkipReason(
@@ -40,7 +41,10 @@ export async function resolveAndRecordPersistedCooldown(
       connection = await fetchConnection(id);
       return connection;
     },
-    allowRateLimitedConnection
+    allowRateLimitedConnection,
+    // nnd.44 ③ (#213): encoding-aware exemption — future EPOCH cooldowns pass
+    // for the last-resort dispatch, ISO planned blackouts still skip.
+    lastResort
   );
   if (reason) recordRecoverablePersistedCooldown(state, connection);
   return reason;

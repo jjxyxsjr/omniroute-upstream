@@ -155,7 +155,20 @@ export async function executeTargetAttempt(
   // era (2026-11-08T14:03/15:09: locks on file for 12d/51min, still dispatched,
   // 429 re-hit + 8-9s rotation). Same advance contract as the internalized
   // 429 path: null + fallbackCount++ moves to the next target (nnd.41b).
-  if (provider && rawModel && target.connectionId && isModelLocked(provider, target.connectionId, rawModel)) {
+  // nnd.44 ③ (#213): the 42d guard is conditionally released for the
+  // request's single LAST-RESORT dispatch — re-checking it would re-skip the
+  // exact lock that dispatch exists to retry past. The last-resort selector
+  // has already refused upstreamReset walls and ISO planned blackouts, so
+  // what reaches here is a synthetic/backoff lock only. Every other guard
+  // (circuit breaker, crash storm, persisted-cooldown encoding gate) still
+  // applies unchanged (note 3).
+  if (
+    provider &&
+    rawModel &&
+    target.connectionId &&
+    !opts.lastResort &&
+    isModelLocked(provider, target.connectionId, rawModel)
+  ) {
     deps.log.info("COMBO",
       `Skipping ${modelStr} — locked (wall/cooldown active), pre-dispatch (#224)`
     );
@@ -174,7 +187,11 @@ export async function executeTargetAttempt(
   const emptyStreamSiblingRecovery = isEmptyStreamSiblingRecoveryEnabled();
   let emptyTurnConnectionId: string | null = null;
   // Retry loop for transient errors
-  for (let retry = 0; retry <= deps.maxRetries; retry++) {
+  // nnd.44 ③ (#213): the last-resort attempt gets exactly ONE pass — the
+  // cost ceiling (at most one upstream attempt per request) must hold even
+  // when the combo config allows per-target retries.
+  const attemptRetryCeiling = opts.lastResort ? 0 : deps.maxRetries;
+  for (let retry = 0; retry <= attemptRetryCeiling; retry++) {
     // Fix #1681: Bail out immediately if the client has disconnected
     if (deps.signal?.aborted) {
       deps.log.info("COMBO", `Client disconnected — aborting combo loop before model ${modelStr}`);

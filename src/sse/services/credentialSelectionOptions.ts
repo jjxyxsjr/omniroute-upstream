@@ -8,6 +8,12 @@ export interface CredentialSelectionOptions {
   requireToolCalling?: boolean;
   allowSuppressedConnections?: boolean;
   allowRateLimitedConnections?: boolean;
+  /**
+   * nnd.44 ③ (#213): the request's single last-resort dispatch may select a
+   * connection under an EPOCH-encoded 429 cooldown. Encoding-aware: ISO
+   * planned blackouts stay filtered (see auth.ts ①b note).
+   */
+  lastResortDispatch?: boolean;
   bypassQuotaPolicy?: boolean;
   forcedConnectionId?: string | null;
   excludeConnectionIds?: string[] | null;

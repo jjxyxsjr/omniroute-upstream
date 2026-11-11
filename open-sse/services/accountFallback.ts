@@ -1139,6 +1139,12 @@ export function getModelLockoutInfo(
     remainingMs: entry.until - Date.now(),
     lockedAt: new Date(entry.lockedAt).toISOString(),
     failureCount: entry.failureCount,
+    // nnd.44 ③ (#213): expose the wall-clock expiry and the upstreamReset
+    // stamp so the last-resort selector can rank retry-worthiness — a lock
+    // whose expiry an upstream declaration set (wall) must not be retried
+    // before its instant, while a backoff/synthetic lock may be.
+    until: entry.until,
+    upstreamReset: entry.upstreamReset === true,
   };
 }
 
@@ -1173,6 +1179,9 @@ export function scanTransientModelLock(provider: string, model: string | null | 
     remainingMs: earliest.until - now,
     lockedAt: new Date(earliest.lockedAt).toISOString(),
     failureCount: earliest.failureCount,
+    // nnd.44 ③ (#213): same exposure as getModelLockoutInfo (see there).
+    until: earliest.until,
+    upstreamReset: earliest.upstreamReset === true,
   };
 }
 

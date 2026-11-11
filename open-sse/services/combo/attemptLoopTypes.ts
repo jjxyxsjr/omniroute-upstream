@@ -56,6 +56,17 @@ export type AttemptLoopState = {
   requestScopedFailureSeen: boolean;
   /** Normalized provider/model keys already refused request-scoped this dispatch. */
   requestScopedRejectedModelKeys?: Set<string>;
+  /**
+   * nnd.44 ③ (#213): one-shot latch — set the moment a last-resort dispatch
+   * fires (both terminal exits share it; a request pays for at most one).
+   */
+  lastResortFired?: boolean;
+  /**
+   * nnd.44 ③ (#213): true ONLY while a last-resort dispatch is being gated/
+   * executed — the persisted-cooldown gate reads it to exempt future EPOCH
+   * cooldowns (encoding-aware). Never persists past the attempt.
+   */
+  lastResortPass?: boolean;
   observeFailure(quotaExhausted: boolean, targetExecutionKey?: string): void;
 };
 
@@ -140,4 +151,12 @@ export interface ExecuteTargetAttemptOptions {
   targetForAttempt: ResolvedComboTarget;
   profile: unknown;
   protectedPriorityTarget: boolean;
+  /**
+   * nnd.44 ③ (#213): this attempt is the request's single last-resort
+   * dispatch. Sanctioned effects: the nnd.42d model-lock pre-dispatch guard
+   * releases (it would re-skip the very lock being retried past) and the
+   * retry loop is clamped to a single pass (cost ceiling ≤ 1 upstream
+   * attempt). All other guards still apply.
+   */
+  lastResort?: boolean;
 }

@@ -62,6 +62,7 @@ import {
   requestScopedReplayKey,
 } from "./comboPredicates.ts";
 import { collectCircuitOpenExclusions, evaluateExecuteTargetGates } from "./executeTargetGates.ts";
+import { tryLastResortDispatch } from "./lastResortDispatch.ts";
 import { createPoolBlockageGate, resolveBlockedPoolStatus } from "./poolBlockageGate.ts";
 import { executeTargetAttempt } from "./executeTargetAttempt.ts";
 import { buildComboDiag } from "./executeTargetClassify.ts";
@@ -716,6 +717,23 @@ export async function dispatchWithCooldownRetry(opts: {
           if (gateDecision === "abort") {
             return errorResponse(499, "Client disconnected while waiting for a blocked pool");
           }
+          // nnd.44 ③ (#213) exit A: before serving the blocked-pool 429, fire
+          // the request's single last-resort dispatch (feature-gated by
+          // OMNIROUTE_LAST_RESORT_DEADLINE_MS, default off). On success its
+          // response is served; on failure/absence the honest 429 below is —
+          // the last-resort failure body never reaches the client.
+          const lastResortA = await tryLastResortDispatch({
+            state,
+            deps,
+            exit: "A",
+            evaluateGates: extra.evaluateGates,
+            executeAttempt: extra.executeAttempt,
+          });
+          if (lastResortA) {
+            finalizeComboTrace(deps.traceInvocationId, state.orderedTargets);
+            finishComboTrace(deps.traceInvocationId, { status: lastResortA.status });
+            return lastResortA;
+          }
           // "timeout": recovery sits outside the wait cap — honest 429 + Retry-After.
           finalizeComboTrace(deps.traceInvocationId, state.orderedTargets);
           finishComboTrace(deps.traceInvocationId, { status: 429 });
@@ -752,6 +770,22 @@ export async function dispatchWithCooldownRetry(opts: {
       finishComboTrace(deps.traceInvocationId, { status: 503 });
       if (!state.lastStatus) {
         if (state.recordedAttempts === 0) {
+          // nnd.44 ③ (#213) exit B: all targets skipped by pre-dispatch filters —
+          // before serving the honest ALL_TARGETS_SKIPPED, fire the request's
+          // single last-resort dispatch (same gates/flags/cost bounds as exit
+          // A; the shared latch makes double-firing impossible). Failure keeps
+          // the honest error below; the last-resort failure body never surfaces.
+          const lastResortB = await tryLastResortDispatch({
+            state,
+            deps,
+            exit: "B",
+            evaluateGates: extra.evaluateGates,
+            executeAttempt: extra.executeAttempt,
+          });
+          if (lastResortB) {
+            finishComboTrace(deps.traceInvocationId, { status: lastResortB.status });
+            return lastResortB;
+          }
           // 007-a2 (replay): this 503 used to be silent — no log line existed,
           // so lockout/cooldown cascades were invisible until the connection DB
           // was inspected by hand. Greppable warn + session for triage.

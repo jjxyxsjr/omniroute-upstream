@@ -229,7 +229,11 @@ export async function evaluateExecuteTargetGates(opts: {
       state,
       target,
       (id) => readConnectionForCooldownGate(id, false),
-      allowRateLimitedConnection
+      allowRateLimitedConnection,
+      // nnd.44 ③ (#213): set only while a last-resort dispatch is running —
+      // future EPOCH cooldowns (real 429s) then pass this gate; ISO planned
+      // blackouts still skip. See lastResortDispatch.ts note 1/3.
+      state.lastResortPass === true
     );
     if (persistedSkip) {
       // Lift-as-is: combo.ts skips without observeFailure / stopProtectedPriorityTarget.
