@@ -14,9 +14,24 @@ let _models: Record<string, RegistryModel[]> | null = null;
 // registry is mutated through the Proxy (set / deleteProperty) and by resetRegistryLookupCache().
 const _modelByIdMemo = new Map<string, RegistryModel | undefined>();
 const _scoresAsMemo = new Map<string, string | undefined>();
+// nnd.45 ②a (#239) — memo for getGlobalModel, same invalidation family as the two above.
+// Its 3-pass scan (incl. an O(models) startsWith substring pass) is the fallback path of
+// getProviderModel/isValidModel/findModelName/supportsXHighEffort; an UNRESOLVABLE id walks
+// all three passes every call (a miss can never be short-circuited without a negative memo),
+// so a burst of unknown model ids (e.g. the 2026-11-12 codex-app-server vision-bridge sweep:
+// 104 requests × several capability lookups each) re-scanned the full 272×2240 registry per
+// call and froze the event loop for 5-11s at a time. Memoize BOTH hits and misses; cap the
+// map so adversarial id fuzzing cannot grow it unbounded (oldest-inserted evicted).
+const _globalModelMemo = new Map<string, RegistryModel | undefined>();
+const GLOBAL_MODEL_MEMO_CAP = 4096;
+/** Test seam: observable size for the nnd.45 ②a memo (hit AND miss keys). */
+export function getGlobalModelMemoSizeForTests(): number {
+  return _globalModelMemo.size;
+}
 export function resetRegistryLookupCache(): void {
   _modelByIdMemo.clear();
   _scoresAsMemo.clear();
+  _globalModelMemo.clear();
 }
 function initModels(): Record<string, RegistryModel[]> {
   if (!_models) _models = generateModels();
@@ -122,6 +137,18 @@ function modelRichness(m: RegistryModel): number {
 }
 
 function getGlobalModel(modelId: string): RegistryModel | undefined {
+  // nnd.45 ②a (#239): negative-result memo FIRST — see _globalModelMemo docblock. has()
+  // distinguishes "memoized miss" from "never asked" (get() cannot: undefined is a value).
+  if (_globalModelMemo.has(modelId)) return _globalModelMemo.get(modelId);
+  const resolved = scanGlobalModel(modelId);
+  if (_globalModelMemo.size >= GLOBAL_MODEL_MEMO_CAP) {
+    _globalModelMemo.delete(_globalModelMemo.keys().next().value as string);
+  }
+  _globalModelMemo.set(modelId, resolved);
+  return resolved;
+}
+
+function scanGlobalModel(modelId: string): RegistryModel | undefined {
   // 1. Exact match — collect all, pick the richest
   let candidates: RegistryModel[] = [];
   for (const models of Object.values(PROVIDER_MODELS)) {

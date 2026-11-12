@@ -5,7 +5,7 @@
 
 import { getResolvedModelCapabilities } from "@/lib/modelCapabilities";
 import { getActiveSyncedCatalog } from "@/lib/db/models/activeSyncedCatalog";
-import { PROVIDER_MODELS } from "@omniroute/open-sse/config/providerModels";
+import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "@omniroute/open-sse/config/providerModels";
 import { getRegisteredProviderEffortBaseModelId } from "@omniroute/open-sse/utils/registeredEffortVariants.ts";
 import {
   hasUsableCredentialsForModel,
@@ -93,6 +93,62 @@ const selectionCache = new Map<string, { modelId: string; expiresAt: number }>()
  */
 const noCandidateCache = new Map<string, number>();
 
+// nnd.45 ③ (#239) — whole-scan cache. getFallbackModels() has no cache of its own, so a
+// describe-failure burst re-walked every provider in PROVIDER_MODELS per retry: the
+// 2026-11-12 codex-app-server sweep (104 failed describes in 13 minutes) evicted
+// 30,599 parse-model-cache entries in ONE 60s window and froze the event loop 5-11s
+// at a time. Bounds any burst to one scan per TTL. Only the production path (no
+// injected deps) is cached — tests inject deps and must observe fresh scans.
+const visionScanCache = new Map<string, { at: number; candidates: VisionModelCandidate[] }>();
+const VISION_SCAN_CACHE_KEY = "global";
+const VISION_SCAN_TTL_MS = 60_000;
+// nnd.45 ②b (#239) — executor-eligibility cache: providers with ≥1 ACTIVE connection row.
+let visionExecutorProvidersCache: { at: number; ids: Set<string> } | null = null;
+const VISION_EXECUTOR_PROVIDERS_TTL_MS = 60_000;
+
+/**
+ * nnd.45 ②b (#239): the set of providers this instance actually configured — i.e. with at
+ * least one ACTIVE row in provider_connections (stored id, plus its registry alias and
+ * canonical id so the lookup matches PROVIDER_MODELS keys, which may be either).
+ *
+ * WHY: a describe EXECUTOR should be a provider the operator set up. `hasUsableCredentialsForModel`
+ * counts the synthetic noauth connection for noAuth providers with ZERO rows (that is display
+ * eligibility, #2798), and the catalog predicate short-circuits open for non-authoritative
+ * catalogs (unconfigured providers never have a fresh synced connection ⇒ never authoritative),
+ * so unconfigured noAuth providers (codex-app-server, cloudflare-playground, duckduckgo-web,
+ * auggie, …) used to enter the candidate pool and burn a registry walk + failed dispatch per
+ * model variant. A noAuth provider the operator DID configure (stored active row) still
+ * qualifies. Returns `null` when the connection store is unreadable — callers fail open to
+ * the historical full walk rather than losing the bridge entirely.
+ */
+async function resolveVisionExecutorProviders(): Promise<Set<string> | null> {
+  if (
+    visionExecutorProvidersCache &&
+    Date.now() - visionExecutorProvidersCache.at < VISION_EXECUTOR_PROVIDERS_TTL_MS
+  ) {
+    return visionExecutorProvidersCache.ids;
+  }
+  try {
+    const { getProviderConnections } = await import("@/lib/db/providers");
+    const rows = await getProviderConnections({ isActive: true });
+    if (!Array.isArray(rows)) return null;
+    const ids = new Set<string>();
+    for (const row of rows) {
+      const provider = typeof row?.provider === "string" ? row.provider.trim() : "";
+      if (!provider) continue;
+      ids.add(provider);
+      const canonical = resolveProviderId(provider);
+      ids.add(canonical);
+      const alias = PROVIDER_ID_TO_ALIAS[canonical] || PROVIDER_ID_TO_ALIAS[provider];
+      if (alias) ids.add(alias);
+    }
+    visionExecutorProvidersCache = { at: Date.now(), ids };
+    return ids;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Record a latency measurement for a model.
  */
@@ -158,6 +214,14 @@ export interface VisionBridgeRouterDeps {
    * `hasUsableCredentials`: `node:test` has no supported ESM module-mocking.
    */
   isModelLocked?: (provider: string, connectionId: string, model: string) => boolean;
+  /**
+   * nnd.45 ②b (#239): executor-eligibility set, defaulting to the real
+   * `resolveVisionExecutorProviders` (active provider_connections rows). When ANY of
+   * the other deps is injected (test context) and this one is not, the filter is
+   * DISABLED so pre-existing tests observe the historical unfiltered walk; inject it
+   * explicitly to exercise the filter.
+   */
+  getExecutorProviders?: () => Promise<Set<string> | null>;
 }
 
 export interface VisionModelCatalog {
@@ -278,9 +342,39 @@ async function getVisionCapableModels(
   deps: VisionBridgeRouterDeps = {}
 ): Promise<VisionModelCandidate[]> {
   const checkCreds = deps.hasUsableCredentials ?? hasUsableCredentialsForModel;
+  // nnd.45 ③ (#239): only the production path (zero injected deps) uses the scan cache —
+  // injected deps are the test seam and must observe fresh scans.
+  const cacheable =
+    deps.hasUsableCredentials === undefined &&
+    deps.getActiveSyncedCatalog === undefined &&
+    deps.isModelLocked === undefined;
+  if (cacheable) {
+    const hit = visionScanCache.get(VISION_SCAN_CACHE_KEY);
+    if (hit && Date.now() - hit.at < VISION_SCAN_TTL_MS) return hit.candidates;
+  }
+  // nnd.45 ②b (#239): a describe executor must be a provider this instance actually
+  // configured (≥1 ACTIVE connection row). See resolveVisionExecutorProviders docblock —
+  // the synthetic noauth connection + non-authoritative catalog predicate let
+  // UNCONFIGURED noAuth providers into the pool (2026-11-12: 104 codex-app-server
+  // 503s from one pasted image). `null` = store unreadable ⇒ fail open (full walk).
+  // Test context (any other dep injected, none of them this one) keeps the historical
+  // unfiltered walk; inject getExecutorProviders explicitly to exercise the filter.
+  const testContext = !cacheable;
+  const executorProviders = deps.getExecutorProviders
+    ? await deps.getExecutorProviders()
+    : testContext
+      ? null
+      : await resolveVisionExecutorProviders();
   const candidatesByProvider = await Promise.all(
     Object.entries(PROVIDER_MODELS).map(async ([providerAlias, models]) => {
       if (!Array.isArray(models)) return [];
+      if (
+        executorProviders &&
+        !executorProviders.has(providerAlias) &&
+        !executorProviders.has(resolveProviderId(providerAlias))
+      ) {
+        return [];
+      }
       const visionModels = models.filter((model) => {
         if (!model?.id) return false;
         const fullModelId = `${providerAlias}/${model.id}`;
@@ -349,7 +443,11 @@ async function getVisionCapableModels(
     })
   );
 
-  return candidatesByProvider.flat();
+  const flat = candidatesByProvider.flat();
+  if (cacheable) {
+    visionScanCache.set(VISION_SCAN_CACHE_KEY, { at: Date.now(), candidates: flat });
+  }
+  return flat;
 }
 
 /**
@@ -550,6 +648,15 @@ export async function getFallbackModels(
 export function clearSelectionCache(): void {
   selectionCache.clear();
   noCandidateCache.clear();
+  // nnd.45 ③/②b (#239): the scan cache and executor-eligibility cache must drop with
+  // the selection caches — operators clear these after connection/credential changes.
+  visionScanCache.clear();
+  visionExecutorProvidersCache = null;
+}
+
+/** Test seam: observable scan-cache size for the nnd.45 ③ cache. */
+export function getVisionScanCacheSizeForTests(): number {
+  return visionScanCache.size;
 }
 
 /**
