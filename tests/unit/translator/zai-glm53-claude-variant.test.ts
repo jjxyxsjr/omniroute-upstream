@@ -43,6 +43,30 @@ test("variant → base + thinking.budget_tokens (glm-cn, the production hole)", 
   assert.ok((out.max_tokens as number) > (thinking.budget_tokens as number));
 });
 
+test("routing-prefixed target id (glm-cn/glm-5.3-flash-high) still translates", () => {
+  // The openai-inbound path stamps the resolved target id into body.model
+  // before the executor runs — trial live-fire ① caught this: the anchored
+  // pattern missed and the raw variant went out (400).
+  const out = applyZaiGlm53ClaudeDefaults(
+    "glm-cn",
+    "glm-cn/glm-5.3-flash-high",
+    claudeBody({ model: "glm-cn/glm-5.3-flash-high" })
+  ) as Record<string, unknown>;
+  assert.equal(out.model, "glm-5.3-flash", "prefix dropped, suffix stripped");
+  assert.equal((out.thinking as Record<string, unknown>).budget_tokens, 122880);
+  // An injected service budget (thinkingBudget INJECT) rides along untouched.
+  const withInject = applyZaiGlm53ClaudeDefaults(
+    "glm-cn",
+    "glm-cn/glm-5.3-flash-high",
+    claudeBody({
+      model: "glm-cn/glm-5.3-flash-high",
+      thinking: { type: "enabled", budget_tokens: 38912 },
+    })
+  ) as Record<string, unknown>;
+  assert.equal(withInject.model, "glm-5.3-flash");
+  assert.equal((withInject.thinking as Record<string, unknown>).budget_tokens, 38912);
+});
+
 test("low variant gets the 1024 floor budget; client thinking budget wins", () => {
   const out = applyZaiGlm53ClaudeDefaults(
     "glm-cn",

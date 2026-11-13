@@ -130,7 +130,14 @@ export function applyZaiGlm53ClaudeDefaults<T>(provider: string, model: string, 
 
   const record = body as Record<string, unknown>;
   const outboundModel = typeof record.model === "string" ? record.model : model;
-  const effortMatch = outboundModel.match(ZAI_GLM_53_EFFORT_MODEL_PATTERN);
+  // Routing stamps the resolved target id ("glm-cn/glm-5.3-flash-high") into
+  // body.model before the executor sees it; the suffix pattern anchors on the
+  // bare id, so match the last path segment (fireworks-style long prefixes
+  // resolve the same way). The wire only ever wants the bare base id.
+  const bareModel = outboundModel.includes("/")
+    ? outboundModel.split("/").pop()!
+    : outboundModel;
+  const effortMatch = bareModel.match(ZAI_GLM_53_EFFORT_MODEL_PATTERN);
   // Base ids keep their current working shape — this pass only exists to
   // translate variant suffixes the upstream cannot resolve.
   if (!effortMatch) return body;
