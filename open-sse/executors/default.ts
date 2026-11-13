@@ -21,6 +21,7 @@ import {
 import { isOfficialAnthropicBaseUrl } from "../utils/anthropicHost.ts";
 import { applyProviderRequestDefaults } from "../services/providerRequestDefaults.ts";
 import { stripUnsupportedParams } from "../translator/paramSupport.ts";
+import { fitThinkingToMaxTokens } from "../translator/request/openai-to-claude/thinkingBudget.ts";
 import { applyRegistryToolNameLengthAliases } from "./toolNameLengthAlias.ts";
 import {
   injectReasoningContentForThinkingModel,
@@ -98,6 +99,72 @@ function hasTools(body: unknown): boolean {
   if (!body || typeof body !== "object" || Array.isArray(body)) return false;
   const tools = (body as Record<string, unknown>).tools;
   return Array.isArray(tools) && tools.length > 0;
+}
+
+// Claude-wire sibling of applyZaiGlm53OpenAIDefaults. The vendor only knows
+// base model ids, so effort-variant suffixes must translate before the
+// anthropic door sees them. The OpenAI-door pass gates on provider ids
+// (zai/glm-coding-apikey): custom anthropic-compatible GLM connections (fork
+// "glm-cn") miss it entirely and their variant names go out raw → upstream
+// 400. And where that pass DOES apply on this wire (zai), it leaves
+// OpenAI-shaped fields behind — reasoning_effort is not an anthropic param and
+// thinking:{type:"enabled"} without budget_tokens is invalid on Anthropic
+// proper. This pass maps a variant to base + thinking.budget_tokens (the same
+// effort→budget table the openai→claude converter uses), fitted against the
+// model output cap so the max_tokens > budget_tokens contract holds. Base ids
+// return untouched — for glm-cn they already work bare, and for zai the
+// OpenAI-door pass above has already applied its legacy defaults.
+const ZAI_GLM_53_CLAUDE_EFFORT_BUDGETS: Record<string, number> = {
+  low: 1024,
+  high: 131072,
+  max: 131072,
+};
+
+function isZaiGlm53ClaudeProvider(provider: string): boolean {
+  return provider === "zai" || provider === "glm-coding-apikey" || provider === "glm-cn";
+}
+
+export function applyZaiGlm53ClaudeDefaults<T>(provider: string, model: string, body: T): T {
+  if (!isZaiGlm53ClaudeProvider(provider)) return body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+
+  const record = body as Record<string, unknown>;
+  const outboundModel = typeof record.model === "string" ? record.model : model;
+  const effortMatch = outboundModel.match(ZAI_GLM_53_EFFORT_MODEL_PATTERN);
+  // Base ids keep their current working shape — this pass only exists to
+  // translate variant suffixes the upstream cannot resolve.
+  if (!effortMatch) return body;
+
+  const baseModel = effortMatch[1];
+  const next: Record<string, unknown> = { ...record };
+  next.model = baseModel;
+  // The claude wire has no reasoning_effort: the variant's effort intent now
+  // lives in thinking.budget_tokens, so drop any OpenAI-shaped effort fields
+  // the converter or the OpenAI-door sibling may have left on the body.
+  delete next.reasoning_effort;
+  delete next.reasoning;
+
+  const existingThinking =
+    record.thinking && typeof record.thinking === "object" && !Array.isArray(record.thinking)
+      ? (record.thinking as Record<string, unknown>)
+      : null;
+  const thinking: Record<string, unknown> = {
+    ...(existingThinking || {}),
+    type: "enabled",
+    clear_thinking: false,
+  };
+  if (!(typeof thinking.budget_tokens === "number" && thinking.budget_tokens > 0)) {
+    thinking.budget_tokens = ZAI_GLM_53_CLAUDE_EFFORT_BUDGETS[effortMatch[2]] ?? 1024;
+  }
+  const fitted = fitThinkingToMaxTokens(
+    baseModel,
+    Number(next.max_tokens) || 0,
+    thinking,
+    provider
+  );
+  next.max_tokens = fitted.maxTokens;
+  next.thinking = fitted.thinking ?? thinking;
+  return next as T;
 }
 
 function applyZaiGlm53OpenAIDefaults<T>(
@@ -1024,7 +1091,15 @@ export class DefaultExecutor extends BaseExecutor {
         }
       }
 
+      // Effort-variant translation: the OpenAI-door pass below stays
+      // unconditional (legacy behavior — it also strips suffixes for zai on
+      // the claude wire). The claude-wire sibling then adds the anthropic-native
+      // form for providers the OpenAI pass's gate misses (custom
+      // anthropic-compatible GLM connections): base name + thinking.budget_tokens.
       withDefaults = applyZaiGlm53OpenAIDefaults(this.provider, model, withDefaults, stream);
+      if (targetFormat === "claude") {
+        withDefaults = applyZaiGlm53ClaudeDefaults(this.provider, model, withDefaults);
+      }
     }
 
     // Config-driven strip of params unsupported by the target provider/model
