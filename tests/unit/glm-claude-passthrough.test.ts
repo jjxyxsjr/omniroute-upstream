@@ -302,3 +302,88 @@ test("nnd.18 audit: 003b floor env clamped to [0,1]", async () => {
   const s = await import("../../open-sse/services/combo/quotaScoring.ts");
   assert.ok(typeof s.scoreResetAwareQuota === "function", "scoring函数存在");
 });
+
+// nnd.46 (#240): effort-tier door choice must respect the claude wire
+test("nnd.46: variant + claude-pinned body stays on the anthropic door", async () => {
+  const { resolveGlmEffortTierTransport } = await import("../../open-sse/executors/glm.ts");
+  const tier = { baseModel: "glm-5.3-flash", effort: "high", transport: "openai" as const };
+  const claudeBody = {
+    model: "glm-5.3-flash-high",
+    max_tokens: 8192,
+    stream: true,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "describe" },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "xx" } },
+        ],
+      },
+    ],
+  };
+  assert.equal(
+    resolveGlmEffortTierTransport(tier, PASSTHROUGH_PSD, claudeBody),
+    "anthropic",
+    "claude-shaped body on a passthrough connection must not hit the coding door"
+  );
+  // Text-only claude bodies were the tolerated case — they must also route
+  // anthropic now (they only worked by luck of block-shape overlap).
+  const textOnly = {
+    model: "glm-5.3-high",
+    max_tokens: 1024,
+    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+  };
+  assert.equal(resolveGlmEffortTierTransport(tier, PASSTHROUGH_PSD, textOnly), "anthropic");
+  // OpenAI-shaped body (string system) on the same connection keeps the
+  // tier's coding door.
+  const openaiBody = {
+    model: "glm-5.3-flash-high",
+    system: "be terse",
+    messages: [{ role: "user", content: "hi" }],
+  };
+  assert.equal(resolveGlmEffortTierTransport(tier, PASSTHROUGH_PSD, openaiBody), "openai");
+  // Non-passthrough connections (glm coding plan) keep the tier table intact.
+  assert.equal(resolveGlmEffortTierTransport(tier, { apiRegion: "china" }, claudeBody), "openai");
+  // GLM-5.2 tiers already target anthropic — unchanged.
+  assert.equal(
+    resolveGlmEffortTierTransport(
+      { baseModel: "glm-5.2", effort: "high", transport: "anthropic" },
+      PASSTHROUGH_PSD,
+      claudeBody
+    ),
+    "anthropic"
+  );
+});
+
+// End-to-end at the transform layer: variant through the anthropic transport
+// lands as base id + thinking budget (the iid 240 production shape).
+test("nnd.46: variant via anthropic transport → base + thinking.budget_tokens", () => {
+  const executor = new GlmExecutor("glm-cn");
+  const body = {
+    model: "glm-cn/glm-5.3-flash-high",
+    max_tokens: 8192,
+    stream: true,
+    thinking: { type: "enabled", budget_tokens: 38912 },
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "describe" },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "xx" } },
+        ],
+      },
+    ],
+  };
+  const out = executor.transformForTransport(
+    "glm-5.3-flash-high",
+    body,
+    true,
+    { apiKey: "k", providerSpecificData: PASSTHROUGH_PSD },
+    "anthropic"
+  ) as Record<string, unknown>;
+  assert.equal(out.model, "glm-5.3-flash", "tier table strips to the base id");
+  assert.equal(out.effort, "high", "tier effort rides the anthropic door's effort field");
+  const thinking = out.thinking as Record<string, unknown>;
+  assert.equal(thinking.type, "enabled");
+  assert.equal(thinking.budget_tokens, 38912, "existing budget preserved");
+});

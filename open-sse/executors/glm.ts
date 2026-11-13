@@ -93,6 +93,30 @@ type GlmEffortTier = {
  * https://docs.z.ai/devpack/latest-model
  * https://docs.z.ai/guides/llm/glm-5.3
  */
+/**
+ * Effort-tier door choice for execute(). The tier table's transport assumes an
+ * OpenAI-shaped body; a claude-pinned connection (anthropic passthrough) hands
+ * us a claude-shaped body, and the OpenAI coding door rejects its wire form —
+ * text blocks happen to be tolerated, image blocks 400
+ * ("messages[0].content[1].type", iid 240 trial live-fire). Such bodies stay on
+ * the anthropic door, where the claude-wire variant translation (base id +
+ * thinking.budget_tokens, applyZaiGlm53ClaudeDefaults in default.ts) carries
+ * the effort instead.
+ */
+export function resolveGlmEffortTierTransport(
+  effortTier: GlmEffortTier,
+  providerSpecificData: unknown,
+  body: unknown
+): GlmTransport {
+  if (
+    effortTier.transport !== "openai" ||
+    (isGlmClaudePassthrough(providerSpecificData) && looksClaudeShaped(asRecord(body)))
+  ) {
+    return "anthropic";
+  }
+  return "openai";
+}
+
 function parseGlmEffortTier(model: string): GlmEffortTier | null {
   switch (model) {
     case "glm-5.2-high":
@@ -700,7 +724,14 @@ export class GlmExecutor extends DefaultExecutor {
     // effort-2025-11-24 beta header in GLM_ANTHROPIC_BETA); GLM-5.3 → OpenAI
     // coding endpoint (`reasoning_effort` param). See parseGlmEffortTier.
     if (effortTier) {
-      return this.executeTransport(input, effortTier.transport);
+      return this.executeTransport(
+        input,
+        resolveGlmEffortTierTransport(
+          effortTier,
+          input.credentials?.providerSpecificData,
+          input.body
+        )
+      );
     }
 
     const primaryTransport = resolveProtocolAlignedTransport(
