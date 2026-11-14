@@ -223,6 +223,37 @@ export const RENAMED_MIGRATION_COMPATIBILITY = [
     toVersion: "101",
     toName: "api_key_usage_limits",
   },
+  // nnd fork 2026-11-13 (iid 241): upstream v3.8.53 ships ITS OWN 213-217 in
+  // the slots our fork migrations occupied. Version-only tracking would
+  // silently skip those upstream migrations on the next merge. Renumber the
+  // fork files into a 9xxx range the upstream will never reach; when the
+  // merge brings a foreign file into an old slot,
+  // reconcileRenumberedMigrations rewrites the stale ledger rows (and clears
+  // residuals) so the upstream migrations apply normally.
+  {
+    fromVersion: "213",
+    fromName: "fork_call_logs_error_raw_head",
+    toVersion: "9213",
+    toName: "fork_call_logs_error_raw_head",
+  },
+  {
+    fromVersion: "214",
+    fromName: "fork_radar_feed_generated_at",
+    toVersion: "9214",
+    toName: "fork_radar_feed_generated_at",
+  },
+  {
+    fromVersion: "215",
+    fromName: "fork_call_logs_queue_wait_ms",
+    toVersion: "9215",
+    toName: "fork_call_logs_queue_wait_ms",
+  },
+  {
+    fromVersion: "216",
+    fromName: "fork_call_logs_latency_phases",
+    toVersion: "9216",
+    toName: "fork_call_logs_latency_phases",
+  },
 ] as const;
 
 export const LEGACY_VERSION_SLOT_MIGRATIONS = [
