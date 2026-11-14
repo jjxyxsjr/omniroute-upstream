@@ -118,7 +118,19 @@ export function resolveGlmEffortTierTransport(
 }
 
 function parseGlmEffortTier(model: string): GlmEffortTier | null {
-  switch (model) {
+  // Routing may stamp the resolved target id ("glm-cn/glm-5.3-flash-high");
+  // the tier table keys on the bare id.
+  const bare = model.includes("/") ? (model.split("/").pop() as string) : model;
+  return parseGlmEffortTierBare(bare);
+}
+
+/** @internal test seam — the tier table keyed on the bare model id. */
+export function __testParseGlmEffortTier(model: string): GlmEffortTier | null {
+  return parseGlmEffortTier(model);
+}
+
+function parseGlmEffortTierBare(bare: string): GlmEffortTier | null {
+  switch (bare) {
     case "glm-5.2-high":
       return { baseModel: "glm-5.2", effort: "high", transport: "anthropic" };
     case "glm-5.2-max":
@@ -206,6 +218,22 @@ function looksClaudeShaped(
   const system = record.system;
   if (typeof system === "string") return false; // openai string system
   return true;
+}
+
+// Tripwire (iid 241): an effort-variant id leaving for the wire untranslated is
+// the iid 240 bug class. Known tiers fold above; anything still variant-shaped
+// at the outbound boundary means a NEW variant the tables don't know yet — say
+// it once per id so ops sees it in logs before upstream 400s do.
+const VARIANT_LEAK_WARNED = new Set<string>();
+function warnGlmVariantLeakOnce(model: string): void {
+  const bare = model.includes("/") ? (model.split("/").pop() as string) : model;
+  if (!/^glm-\d/i.test(bare)) return;
+  if (!/-(low|high|max|xhigh|medium|ultra)$/i.test(bare)) return;
+  if (VARIANT_LEAK_WARNED.has(bare)) return;
+  VARIANT_LEAK_WARNED.add(bare);
+  console.warn(
+    `[TRIPWIRE] glm variant id "${bare}" left untranslated at the wire boundary — extend the tier/translation tables (iid 240 class)`
+  );
 }
 
 function isRetryableGlmFallbackStatus(status: number): boolean {
@@ -386,6 +414,7 @@ export class GlmExecutor extends DefaultExecutor {
 
     const transformed = this.transformRequest(effectiveModel, body, stream, credentials);
     const record = asRecord(transformed);
+    if (record?.model) warnGlmVariantLeakOnce(String(record.model));
 
     // #7364: unlike DefaultExecutor.execute() (default.ts), GlmExecutor.execute()
     // never calls the base execute() loop — it drives its own fetch via
@@ -636,6 +665,13 @@ export class GlmExecutor extends DefaultExecutor {
       });
     }
 
+    // iid 241: call_logs.target_format records the PLAN; this line records the
+    // ACTUAL door that answered (they diverge under failover / tier routing —
+    // the iid 240 investigation had to dig artifacts for exactly this).
+    console.info(
+      `[DOOR] provider=${this.provider} transport=${transport} status=${response.status} model=${input.model}`
+    );
+
     if (input.stream && response.ok) {
       const readiness = await ensureStreamReadiness(response, {
         timeoutMs: STREAM_READINESS_TIMEOUT_MS,
@@ -741,11 +777,26 @@ export class GlmExecutor extends DefaultExecutor {
     // #114: the failover door below is the OTHER door — for a protocol-aligned
     // request that is the pinned (translated) door, so pool liquidity survives.
     const fallbackTransport: GlmTransport = primaryTransport === "openai" ? "anthropic" : "openai";
+    // iid 241 GAP1: the doors are two wires into the SAME account (one quota
+    // pool), so a door switch never rescues a quota 429 — and the coding door
+    // cannot take a claude-wire body: text blocks happen to be tolerated, image
+    // blocks 400 ("content[1].type", the iid 240 production path). Only ride a
+    // fallback door whose wire matches the body; otherwise return the primary
+    // result and let the combo layer rotate accounts.
+    const fallbackWireMatchesBody =
+      fallbackTransport === "anthropic" || !looksClaudeShaped(asRecord(input.body));
 
     let primaryResult: GlmExecuteResult | null = null;
     try {
       primaryResult = await this.executeTransport(input, primaryTransport);
       if (!isRetryableGlmFallbackStatus(primaryResult.response.status)) {
+        return primaryResult;
+      }
+      if (!fallbackWireMatchesBody) {
+        input.log?.debug?.(
+          "GLM_FALLBACK",
+          `${primaryTransport} returned ${primaryResult.response.status}; skipping ${fallbackTransport} fallback — claude-wire body on a shared-account door (iid 241 GAP1)`
+        );
         return primaryResult;
       }
       input.log?.debug?.(
@@ -754,6 +805,13 @@ export class GlmExecutor extends DefaultExecutor {
       );
     } catch (error) {
       if (!isRetryableGlmFallbackError(error)) throw error;
+      if (!fallbackWireMatchesBody) {
+        input.log?.debug?.(
+          "GLM_FALLBACK",
+          `${primaryTransport} error (${error instanceof Error ? error.message : String(error)}); skipping ${fallbackTransport} fallback — claude-wire body on a shared-account door (iid 241 GAP1)`
+        );
+        throw error;
+      }
       input.log?.debug?.(
         "GLM_FALLBACK",
         `${primaryTransport} error (${error instanceof Error ? error.message : String(error)}); trying ${fallbackTransport}`

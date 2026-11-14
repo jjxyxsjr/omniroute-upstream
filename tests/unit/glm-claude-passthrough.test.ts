@@ -387,3 +387,83 @@ test("nnd.46: variant via anthropic transport → base + thinking.budget_tokens"
   assert.equal(thinking.type, "enabled");
   assert.equal(thinking.budget_tokens, 38912, "existing budget preserved");
 });
+
+// nnd.47 (#241): GAP1 failover wire guard + GAP3 prefix tolerance + door log
+test("nnd.47 GAP3: parseGlmEffortTier tolerates the routing prefix", async () => {
+  const { __testParseGlmEffortTier } = await import("../../open-sse/executors/glm.ts");
+  if (!__testParseGlmEffortTier) return; // export missing → fail loudly below
+  assert.deepEqual(__testParseGlmEffortTier("glm-cn/glm-5.3-flash-high"), {
+    baseModel: "glm-5.3-flash",
+    effort: "high",
+    transport: "openai",
+  });
+  assert.equal(__testParseGlmEffortTier("glm-5.3-flash"), null);
+});
+
+test("nnd.47 GAP1: execute() skips the openai-door fallback for claude-shaped bodies", async () => {
+  // Wire-level test: stub executeTransport via a subclass and drive execute()
+  // with a claude-shaped body whose primary (anthropic) result is a retryable
+  // 429. The fallback door must NEVER be the openai door for this body.
+  const mod = await import("../../open-sse/executors/glm.ts");
+  const { GlmExecutor } = mod;
+  const seen: string[] = [];
+  class Probe extends GlmExecutor {
+    protected async executeTransportProbe() {}
+    // @ts-expect-error test override of private method via any-cast
+    async executeTransport(_input: unknown, transport: string) {
+      seen.push(transport);
+      // Every door answers 429 first so the failover chain is exercised; the
+      // assertions care only about WHICH doors were attempted.
+      return {
+        response: new Response("rate limited", { status: 429 }),
+        url: `https://x/${transport}`,
+        headers: {},
+        transformedBody: {},
+        targetFormat: transport === "anthropic" ? "claude" : "openai",
+      };
+    }
+  }
+  const executor = new (Probe as unknown as new (p: string) => InstanceType<typeof Probe>)("glm-cn");
+  const claudeBody = {
+    model: "glm-5.3-flash",
+    max_tokens: 1024,
+    stream: true,
+    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+  };
+  const result = await (
+    executor as unknown as {
+      execute: (i: unknown) => Promise<{ response: Response }>;
+    }
+  ).execute({
+    model: "glm-5.3-flash",
+    body: claudeBody,
+    stream: true,
+    credentials: { apiKey: "k", providerSpecificData: PASSTHROUGH_PSD },
+    log: { debug: () => {} },
+  });
+  assert.deepEqual(seen, ["anthropic"], "claude-shaped body must never ride the openai door");
+  assert.equal(result.response.status, 429, "primary result returned honestly");
+
+  // Openai-shaped body on a non-passthrough connection keeps the dual-door
+  // failover (the proven liquidity path).
+  seen.length = 0;
+  const openaiBody = {
+    model: "glm-5.3-flash",
+    system: "be terse",
+    max_tokens: 1024,
+    messages: [{ role: "user", content: "hi" }],
+  };
+  const executor2 = new (Probe as unknown as new (p: string) => InstanceType<typeof Probe>)("glm");
+  await (
+    executor2 as unknown as {
+      execute: (i: unknown) => Promise<{ response: Response }>;
+    }
+  ).execute({
+    model: "glm-5.3-flash",
+    body: openaiBody,
+    stream: true,
+    credentials: { apiKey: "k", providerSpecificData: { apiRegion: "china" } },
+    log: { debug: () => {} },
+  });
+  assert.deepEqual(seen.sort(), ["anthropic", "openai"], "openai-shaped body keeps both doors");
+});

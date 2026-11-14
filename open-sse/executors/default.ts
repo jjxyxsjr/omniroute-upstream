@@ -185,7 +185,13 @@ function applyZaiGlm53OpenAIDefaults<T>(
 
   const record = body as Record<string, unknown>;
   const outboundModel = typeof record.model === "string" ? record.model : model;
-  const effortMatch = outboundModel.match(ZAI_GLM_53_EFFORT_MODEL_PATTERN);
+  // Routing stamps the resolved target id ("glm-cn/glm-5.3-flash-high") into
+  // body.model before the executor sees it; the suffix pattern anchors on the
+  // bare id, so match the last path segment (mirrors the claude-wire sibling).
+  const bareModel = outboundModel.includes("/")
+    ? outboundModel.split("/").pop()!
+    : outboundModel;
+  const effortMatch = bareModel.match(ZAI_GLM_53_EFFORT_MODEL_PATTERN);
   const baseModel = effortMatch?.[1] ?? outboundModel;
   if (!ZAI_GLM_53_OPENAI_MODEL_PATTERN.test(baseModel)) return body;
 
