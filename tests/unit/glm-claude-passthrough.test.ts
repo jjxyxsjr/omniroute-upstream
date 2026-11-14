@@ -306,7 +306,7 @@ test("nnd.18 audit: 003b floor env clamped to [0,1]", async () => {
 // nnd.46 (#240): effort-tier door choice must respect the claude wire
 test("nnd.46: variant + claude-pinned body stays on the anthropic door", async () => {
   const { resolveGlmEffortTierTransport } = await import("../../open-sse/executors/glm.ts");
-  const tier = { baseModel: "glm-5.3-flash", effort: "high", transport: "openai" as const };
+  const tier = { baseModel: "glm-5.3-flash", effort: "high", transport: "openai" } as const;
   const claudeBody = {
     model: "glm-5.3-flash-high",
     max_tokens: 8192,
@@ -347,7 +347,7 @@ test("nnd.46: variant + claude-pinned body stays on the anthropic door", async (
   // GLM-5.2 tiers already target anthropic — unchanged.
   assert.equal(
     resolveGlmEffortTierTransport(
-      { baseModel: "glm-5.2", effort: "high", transport: "anthropic" },
+      { baseModel: "glm-5.2", effort: "high", transport: "anthropic" } as const,
       PASSTHROUGH_PSD,
       claudeBody
     ),
